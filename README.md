@@ -14,20 +14,20 @@ corresponding snippet in .vimrc or execute the corresponding commands:
 ### Vundle
 
 ```vim
-Plugin 'bivab/prob.vim'
+Plugin 'Quoteme/prob.vim'
 ```
 
 ### NeoBundle
 
 ```vim
-NeoBundle 'bivab/prob.vim'
+NeoBundle 'Quoteme/prob.vim'
 ```
 
 ### pathogen.vim
 
 ```sh
 cd ~/.vim/bundle
-git clone https://github.com/bivab/prob.vim
+git clone https://github.com/Quoteme/prob.vim
 ```
 
 ### Manual Installation
@@ -44,6 +44,13 @@ CLI](http://www.stups.hhu.de/ProB/index.php5/ProB_Cli) which is shipped with
 7 or later, see [Java requirements for B
 parser](http://stups.hhu.de/ProB/index.php5/Download#Java__Requirements_for_B_parser)
 for details.
+
+## Usage
+
+Open or save a `.mch` or `.rmch` file. The plugin runs `probcli` on it in the
+background and lists any parse or type errors in the quickfix window. Use
+`:cnext` / `:cprev` to jump between errors. To check manually, run
+`:call probcli#Check()`.
 
 ## Configuration
 
