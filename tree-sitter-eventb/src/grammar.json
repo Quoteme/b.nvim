@@ -897,6 +897,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "oftype"
+        },
+        {
+          "type": "SYMBOL",
           "name": "quantified_predicate"
         },
         {
@@ -1180,7 +1184,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 6,
+          "value": 7,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1302,7 +1306,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 7,
+          "value": 8,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1444,7 +1448,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 8,
+          "value": 9,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1486,7 +1490,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 9,
+          "value": 10,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1532,7 +1536,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 10,
+          "value": 11,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1586,7 +1590,7 @@
         },
         {
           "type": "PREC_RIGHT",
-          "value": 11,
+          "value": 12,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1658,7 +1662,7 @@
         },
         {
           "type": "PREC",
-          "value": 12,
+          "value": 13,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1691,6 +1695,44 @@
           }
         }
       ]
+    },
+    "oftype": {
+      "type": "PREC_LEFT",
+      "value": 6,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "expression",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_formula"
+            }
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "⦂"
+              },
+              {
+                "type": "STRING",
+                "value": "oftype"
+              }
+            ]
+          },
+          {
+            "type": "FIELD",
+            "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_formula"
+            }
+          }
+        ]
+      }
     },
     "_dot": {
       "type": "CHOICE",
@@ -1851,7 +1893,7 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "identifier"
+          "name": "_declaration"
         },
         {
           "type": "REPEAT",
@@ -1864,16 +1906,63 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "identifier"
+                "name": "_declaration"
               }
             ]
           }
         }
       ]
     },
+    "_declaration": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "typed_identifier"
+        }
+      ]
+    },
+    "typed_identifier": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "⦂"
+            },
+            {
+              "type": "STRING",
+              "value": "oftype"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_formula"
+          }
+        }
+      ]
+    },
     "inverse": {
       "type": "PREC",
-      "value": 13,
+      "value": 14,
       "content": {
         "type": "SEQ",
         "members": [
@@ -1899,7 +1988,7 @@
     },
     "call": {
       "type": "PREC",
-      "value": 13,
+      "value": 14,
       "content": {
         "type": "SEQ",
         "members": [
@@ -1949,7 +2038,7 @@
     },
     "image": {
       "type": "PREC",
-      "value": 13,
+      "value": 14,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2147,7 +2236,7 @@
                     "members": [
                       {
                         "type": "SYMBOL",
-                        "name": "identifier"
+                        "name": "_declaration"
                       },
                       {
                         "type": "REPEAT",
@@ -2160,7 +2249,7 @@
                             },
                             {
                               "type": "SYMBOL",
-                              "name": "identifier"
+                              "name": "_declaration"
                             }
                           ]
                         }
@@ -2430,6 +2519,14 @@
     [
       "_formula",
       "set_comprehension"
+    ],
+    [
+      "_formula",
+      "_declaration"
+    ],
+    [
+      "_formula",
+      "typed_identifier"
     ]
   ],
   "precedences": [],

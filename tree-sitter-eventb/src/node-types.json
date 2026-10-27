@@ -96,6 +96,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -209,6 +213,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -296,6 +304,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -393,6 +405,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -470,6 +486,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -909,6 +929,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -1005,6 +1029,10 @@
           "named": true
         },
         {
+          "type": "oftype",
+          "named": true
+        },
+        {
           "type": "parenthesized_formula",
           "named": true
         },
@@ -1094,6 +1122,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -1166,6 +1198,10 @@
         },
         {
           "type": "inverse",
+          "named": true
+        },
+        {
+          "type": "oftype",
           "named": true
         },
         {
@@ -1452,6 +1488,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -1489,6 +1529,10 @@
       "types": [
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "typed_identifier",
           "named": true
         }
       ]
@@ -1544,6 +1588,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -1618,6 +1666,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -1708,6 +1760,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -1806,6 +1862,10 @@
           "named": true
         },
         {
+          "type": "oftype",
+          "named": true
+        },
+        {
           "type": "parenthesized_formula",
           "named": true
         },
@@ -1879,6 +1939,168 @@
     }
   },
   {
+    "type": "oftype",
+    "named": true,
+    "fields": {
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_formula",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "builtin_call",
+            "named": true
+          },
+          {
+            "type": "builtin_constant",
+            "named": true
+          },
+          {
+            "type": "builtin_set",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "empty_set",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "image",
+            "named": true
+          },
+          {
+            "type": "integer",
+            "named": true
+          },
+          {
+            "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
+            "named": true
+          },
+          {
+            "type": "parenthesized_formula",
+            "named": true
+          },
+          {
+            "type": "quantified_expression",
+            "named": true
+          },
+          {
+            "type": "quantified_predicate",
+            "named": true
+          },
+          {
+            "type": "set_comprehension",
+            "named": true
+          },
+          {
+            "type": "set_extension",
+            "named": true
+          },
+          {
+            "type": "unary_formula",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_formula",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "builtin_call",
+            "named": true
+          },
+          {
+            "type": "builtin_constant",
+            "named": true
+          },
+          {
+            "type": "builtin_set",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "empty_set",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "image",
+            "named": true
+          },
+          {
+            "type": "integer",
+            "named": true
+          },
+          {
+            "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
+            "named": true
+          },
+          {
+            "type": "parenthesized_formula",
+            "named": true
+          },
+          {
+            "type": "quantified_expression",
+            "named": true
+          },
+          {
+            "type": "quantified_predicate",
+            "named": true
+          },
+          {
+            "type": "set_comprehension",
+            "named": true
+          },
+          {
+            "type": "set_extension",
+            "named": true
+          },
+          {
+            "type": "unary_formula",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "parameter",
     "named": true,
     "fields": {},
@@ -1943,6 +2165,10 @@
         },
         {
           "type": "inverse",
+          "named": true
+        },
+        {
+          "type": "oftype",
           "named": true
         },
         {
@@ -2025,6 +2251,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -2099,6 +2329,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -2170,6 +2404,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -2280,6 +2518,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -2425,6 +2667,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -2499,6 +2745,10 @@
             "named": true
           },
           {
+            "type": "oftype",
+            "named": true
+          },
+          {
             "type": "parenthesized_formula",
             "named": true
           },
@@ -2534,6 +2784,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "typed_identifier",
             "named": true
           }
         ]
@@ -2590,6 +2844,10 @@
         },
         {
           "type": "inverse",
+          "named": true
+        },
+        {
+          "type": "oftype",
           "named": true
         },
         {
@@ -2655,6 +2913,100 @@
     }
   },
   {
+    "type": "typed_identifier",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_formula",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "builtin_call",
+            "named": true
+          },
+          {
+            "type": "builtin_constant",
+            "named": true
+          },
+          {
+            "type": "builtin_set",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "empty_set",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "image",
+            "named": true
+          },
+          {
+            "type": "integer",
+            "named": true
+          },
+          {
+            "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
+            "named": true
+          },
+          {
+            "type": "parenthesized_formula",
+            "named": true
+          },
+          {
+            "type": "quantified_expression",
+            "named": true
+          },
+          {
+            "type": "quantified_predicate",
+            "named": true
+          },
+          {
+            "type": "set_comprehension",
+            "named": true
+          },
+          {
+            "type": "set_extension",
+            "named": true
+          },
+          {
+            "type": "unary_formula",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "unary_formula",
     "named": true,
     "fields": {
@@ -2704,6 +3056,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -2824,6 +3180,10 @@
           "named": true
         },
         {
+          "type": "oftype",
+          "named": true
+        },
+        {
           "type": "parenthesized_formula",
           "named": true
         },
@@ -2910,6 +3270,10 @@
           },
           {
             "type": "inverse",
+            "named": true
+          },
+          {
+            "type": "oftype",
             "named": true
           },
           {
@@ -3286,6 +3650,10 @@
     "named": false
   },
   {
+    "type": "oftype",
+    "named": false
+  },
+  {
     "type": "or",
     "named": false
   },
@@ -3587,6 +3955,10 @@
   },
   {
     "type": "⤖",
+    "named": false
+  },
+  {
+    "type": "⦂",
     "named": false
   },
   {

@@ -88,11 +88,11 @@
         done
       '';
 
-      # Open every test file headlessly in Neovim and print the diagnostics
-      # reported by the language server.
-      prob-lsp-test = pkgs.writeShellScriptBin "prob-lsp-test" ''
+      # Run the specs in tests/spec/ against the language server, optionally
+      # only those whose name contains the first argument.
+      prob-spec = pkgs.writeShellScriptBin "prob-spec" ''
         cd "''${PROB_VIM_ROOT:-$PWD}"
-        exec ${nvim-prob}/bin/nvim-prob --headless -c "luafile tests/lsp_diagnostics.lua"
+        exec ${nvim-prob}/bin/nvim-prob -l tests/spec.lua "$@"
       '';
     in
     {
@@ -131,12 +131,12 @@
           tree-sitter-b-corpus = corpus "tree-sitter-b" ./tree-sitter-b;
           tree-sitter-eventb-corpus = corpus "tree-sitter-eventb" ./tree-sitter-eventb;
 
-          lsp-diagnostics =
-            pkgs.runCommand "prob-lsp-diagnostics"
+          spec =
+            pkgs.runCommand "prob-spec"
               {
                 nativeBuildInputs = [
                   b-language-server
-                  prob-lsp-test
+                  prob-spec
                 ];
               }
               ''
@@ -144,10 +144,8 @@
                 chmod -R u+w source
                 cd source
                 export HOME=$TMPDIR PROB_VIM_ROOT=$PWD
-                prob-lsp-test > $out 2>&1 || { cat $out; exit 1; }
+                prob-spec > $out 2>&1 || { cat $out; exit 1; }
                 cat $out
-                grep -q 'TestFiles/TypeError.mch:12:20: Type mismatch' $out
-                grep -q "TestFiles/eventb/TypeErrors.mch:23:13: Identifier 'cuont' has not been declared" $out
               '';
         };
 
@@ -163,7 +161,7 @@
           vim-prob
           nvim-prob
           prob-vim-test
-          prob-lsp-test
+          prob-spec
         ];
         shellHook = ''
           export PROB_VIM_ROOT="$PWD"

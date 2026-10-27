@@ -43,7 +43,9 @@ stdenv.mkDerivation (finalAttrs: {
     # tolerates partial client settings, publishes file:// URIs, and matches
     # prob-java to probcli 1.16.
     ./client-compat.patch
-    # Checks Event-B machines and contexts written in Camille notation.
+    # Checks Event-B machines and contexts written in Camille notation like
+    # Rodin: static checks, proof obligations discharged with ProB, and model
+    # checking as a code action.
     ./eventb-camille.patch
   ];
 

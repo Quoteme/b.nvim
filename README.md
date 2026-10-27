@@ -173,11 +173,29 @@ Classical B and Event-B share `.mch`, so the plugin looks at the first word:
 lowercase `machine` or `context` means Event-B (filetype `eventb`), anything
 else classical B (filetype `b`).
 
-In Neovim, the language server parses the component and every component it
-`sees`, `refines` or `extends`, looked up as `<name>.mch` next to it, and
-type-checks all formulas like Rodin's static checker. If that passes, it
-loads the model into ProB for further checks. Vim highlights nothing and
-checks nothing for Event-B, because `probcli` cannot load Camille notation.
+In Neovim, the language server does what Rodin does on save:
+
+- **Static checks:** it parses the component and every component it `sees`,
+  `refines` or `extends`, looked up as `<name>.mch` next to it, and applies the
+  rules of Rodin's static checker: typing, visibility of identifiers, labels,
+  witnesses, initialisation, merged and extended events, variants. Formulas may
+  use ASCII notation (`:`, `-->`, `!x.`).
+- **Proof obligations:** it generates Rodin's proof obligations (WD, THM, INV,
+  FIS, GRD, SIM, EQL, MRG, WFIS, WWD, NAT, VAR, FIN, VWD) and lets ProB's
+  constraint solver discharge them. A counterexample is shown as a warning
+  (`inc/inv1/INV does not hold, e.g. for n = 3`), an obligation ProB can
+  neither prove nor refute as a hint.
+
+Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
+
+- **model check**, which reports deadlocks and invariant violations with the
+  events leading to them
+- **discharge proof obligations** again with ten times the timeout
+- **list proof obligations** with their status in the quickfix list
+
+Rodin's interactive prover has no counterpart; list the obligations to see what
+is left. Vim highlights nothing and checks nothing for Event-B, because
+`probcli` cannot load Camille notation.
 
 ## Configuration
 
@@ -188,7 +206,13 @@ require('prob').setup({
   lsp = {
     cmd = { 'b-language-server', '--stdio' },
     settings = {
-      prob = { wdChecks = true, strictChecks = true, performanceHints = true },
+      prob = {
+        wdChecks = true,
+        strictChecks = true,
+        performanceHints = true,
+        poTimeout = 1000, -- milliseconds per proof obligation
+        modelCheckStates = 100000,
+      },
     },
   },
   treesitter = true, -- false keeps the regex syntax
@@ -208,9 +232,12 @@ let g:prob_parser = "~/some_path/probcli"
 tree-sitter CLI, plus:
 
 - `nvim-prob` / `vim-prob`: start the editor with only this checkout loaded
-- `prob-lsp-test` / `prob-vim-test`: print the problems reported for
-  `TestFiles/`
-- `nix flake check`: run the grammar corpus tests and the LSP test
+- `prob-spec [filter]`: run the specs in `tests/spec/`, each a small model
+  taken from the [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/)
+  or the [ProB syntax summary](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax),
+  with the diagnostics the documentation calls for
+- `prob-vim-test`: print the quickfix entries Vim reports for `TestFiles/`
+- `nix flake check`: run the grammar corpus tests and the specs, as CI does
 
 The grammars live in `tree-sitter-b/` and `tree-sitter-eventb/`; run
 `tree-sitter generate --js-runtime native` and `tree-sitter test` there after

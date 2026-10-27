@@ -15,14 +15,15 @@ const PREC = {
   and_or: 3,
   not: 4,
   relation: 5,
-  arrow: 6,
-  set_op: 7,
-  interval: 8,
-  additive: 9,
-  multiplicative: 10,
-  power: 11,
-  unary: 12,
-  postfix: 13,
+  oftype: 6,
+  arrow: 7,
+  set_op: 8,
+  interval: 9,
+  additive: 10,
+  multiplicative: 11,
+  power: 12,
+  unary: 13,
+  postfix: 14,
 };
 
 const OP = {
@@ -75,6 +76,8 @@ module.exports = grammar({
   conflicts: $ => [
     // `{x, y` may start a set extension, a comprehension or a pattern.
     [$._formula, $.set_comprehension],
+    [$._formula, $._declaration],
+    [$._formula, $.typed_identifier],
   ],
 
   rules: {
@@ -200,6 +203,7 @@ module.exports = grammar({
     _formula: $ => choice(
       $.binary_formula,
       $.unary_formula,
+      $.oftype,
       $.quantified_predicate,
       $.quantified_expression,
       $.inverse,
@@ -244,6 +248,13 @@ module.exports = grammar({
       prec(PREC.unary, seq(field('operator', choice('−', '-')), field('operand', $._formula))),
     ),
 
+    // E ⦂ T gives E the type T (Rodin Handbook 3.3.7).
+    oftype: $ => prec.left(PREC.oftype, seq(
+      field('expression', $._formula),
+      choice('⦂', 'oftype'),
+      field('type', $._formula),
+    )),
+
     _dot: _ => choice('·', '.'),
 
     _mid: _ => choice('∣', '|'),
@@ -264,7 +275,15 @@ module.exports = grammar({
       field('body', $._formula),
     )),
 
-    identifier_list: $ => commaSep1($.identifier),
+    identifier_list: $ => commaSep1($._declaration),
+
+    _declaration: $ => choice($.identifier, $.typed_identifier),
+
+    typed_identifier: $ => seq(
+      field('name', $.identifier),
+      choice('⦂', 'oftype'),
+      field('type', $._formula),
+    ),
 
     inverse: $ => prec(PREC.postfix, seq($._formula, choice('∼', '~'))),
 
@@ -290,7 +309,7 @@ module.exports = grammar({
       '{',
       choice(
         seq(
-          field('variables', commaSep1($.identifier)),
+          field('variables', commaSep1($._declaration)),
           $._dot,
           field('predicate', $._formula),
           $._mid,

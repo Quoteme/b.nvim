@@ -242,3 +242,41 @@ end
                 (builtin_call
                   (builtin_function)
                   (builtin_set))))))))))
+
+================================================================================
+Type annotations
+================================================================================
+
+context c0
+axioms
+  @axm1 (∅ ⦂ ℙ(ℤ)) = ∅
+  @axm2 ∃x ⦂ ℤ, y·x ≠ y
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (axioms_clause
+      (axiom
+        (label)
+        (binary_formula
+          (parenthesized_formula
+            (oftype
+              (empty_set)
+              (builtin_call
+                (builtin_function)
+                (builtin_set))))
+          (empty_set)))
+      (axiom
+        (label)
+        (quantified_predicate
+          (identifier_list
+            (typed_identifier
+              (identifier)
+              (builtin_set))
+            (identifier))
+          (binary_formula
+            (identifier)
+            (identifier)))))))

@@ -12,6 +12,10 @@ M.config = {
         strictChecks = true,
         performanceHints = true,
         debugMode = false,
+        -- Milliseconds ProB may spend on each proof obligation.
+        poTimeout = 1000,
+        -- States the model checker explores at most.
+        modelCheckStates = 100000,
       },
     },
   },
@@ -24,6 +28,29 @@ local function show_message(err, result, ctx)
     return
   end
   return vim.lsp.handlers['window/showMessage'](err, result, ctx)
+end
+
+--- Lists the proof obligations of the current file in the quickfix list.
+--- The server answers `prob.showPOs` with the obligations and their status.
+local function show_pos(command, ctx)
+  local client = assert(vim.lsp.get_client_by_id(ctx.client_id))
+  client:request('workspace/executeCommand', command, function(err, result)
+    if err then
+      return vim.notify('prob: ' .. err.message, vim.log.levels.ERROR)
+    end
+    local items = {}
+    for _, po in ipairs(result or {}) do
+      table.insert(items, {
+        filename = vim.uri_to_fname(po.uri),
+        lnum = po.line + 1,
+        col = po.character + 1,
+        type = po.status == 'disproved' and 'W' or (po.status == 'undischarged' and 'I' or ''),
+        text = ('%s: %s%s'):format(po.name, po.status, po.detail ~= '' and (' (' .. po.detail .. ')') or ''),
+      })
+    end
+    vim.fn.setqflist({}, 'r', { title = 'Proof obligations', items = items })
+    vim.cmd('botright copen')
+  end, ctx.bufnr)
 end
 
 --- Filetype of a B file: Event-B in Camille notation (`machine m0`,
@@ -65,6 +92,7 @@ local function enable_lsp()
     settings = M.config.lsp.settings,
     handlers = { ['window/showMessage'] = show_message },
   })
+  vim.lsp.commands['prob.showPOs'] = show_pos
   vim.lsp.enable('prob')
 end
 
