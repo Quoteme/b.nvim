@@ -61,6 +61,41 @@ in
 }
 ```
 
+### Requirements with `nix shell`
+
+Without home-manager, the flake can still provide every external
+requirement for one shell session, e.g. alongside lazy.nvim below:
+
+```sh
+nix shell github:Quoteme/prob.vim#b-language-server \
+          github:Quoteme/prob.vim#prob \
+          nixpkgs#tree-sitter nixpkgs#gcc
+nvim model.mch
+```
+
+This puts `b-language-server` (with its Java), `probcli`, and the tree-sitter
+CLI and C compiler for building the parsers on `$PATH`. To keep them per
+project, add them to the project's own `flake.nix` and enter it with
+`nix develop`:
+
+```nix
+{
+  inputs.prob-vim.url = "github:Quoteme/prob.vim";
+  inputs.nixpkgs.follows = "prob-vim/nixpkgs";
+
+  outputs = { nixpkgs, prob-vim, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in
+    {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with prob-vim.packages.${system}; [ b-language-server prob ];
+      };
+    };
+}
+```
+
 ### Neovim with lazy.nvim
 
 ```lua
