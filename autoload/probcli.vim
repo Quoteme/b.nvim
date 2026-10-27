@@ -19,6 +19,10 @@ if !exists("g:prob_parser")
 end
 
 function! probcli#Check() "{{{1
+  " probcli cannot load Event-B in Camille notation.
+  if &filetype ==# 'eventb'
+    return
+  endif
   let cmd=g:prob_parser ." -p MAX_INITIALISATIONS 0 -p show_full_error_span true ". @%
   if has('nvim')
     call s:ProbAsyncNvim(cmd)

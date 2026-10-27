@@ -1,0 +1,591 @@
+diff --git a/build.gradle.kts b/build.gradle.kts
+index 3a000bc..db819b4 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -30,6 +30,8 @@ dependencies {
+ 
+     implementation(platform("de.hhu.stups:prob-java-bom:4.16.1"))
+     implementation("de.hhu.stups", "prob-java")
++    // Parser for Event-B in Camille notation
++    implementation("de.hhu.stups:eventbstruct:2.16.1")
+ }
+ 
+ java {
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Camille.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Camille.kt
+new file mode 100644
+index 0000000..369bfa9
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Camille.kt
+@@ -0,0 +1,490 @@
++package b.language.server.proBMangement.prob
++
++import de.be4.eventb.core.parser.BException
++import de.be4.eventb.core.parser.EventBLexerException
++import de.be4.eventb.core.parser.EventBParseException
++import de.be4.eventb.core.parser.EventBParser
++import de.be4.eventb.core.parser.node.*
++import de.prob.animator.domainobjects.EventB
++import de.prob.model.eventb.*
++import de.prob.model.representation.AbstractElement
++import de.prob.model.representation.DependencyGraph.ERefType
++import de.prob.model.representation.ModelElementList
++import org.eclipse.lsp4j.Diagnostic
++import org.eclipse.lsp4j.DiagnosticSeverity
++import org.eclipse.lsp4j.Position
++import org.eclipse.lsp4j.Range
++import org.eventb.core.ast.ASTProblem
++import org.eventb.core.ast.Formula
++import org.eventb.core.ast.FormulaFactory
++import org.eventb.core.ast.FreeIdentifier
++import org.eventb.core.ast.IParseResult
++import org.eventb.core.ast.ITypeEnvironmentBuilder
++import org.eventb.core.ast.SourceLocation
++import de.be4.eventb.core.parser.lexer.LexerException
++import java.io.File
++import de.prob.model.representation.Set as ProBSet
++
++/**
++ * Event-B machines and contexts written in Camille notation (`machine m0 sees c0 ...`).
++ *
++ * ProB only loads Event-B from Rodin projects, so the components are parsed
++ * here, type-checked with Rodin's AST library like Rodin's static checker
++ * would, and then handed to ProB as a prob-java model.
++ */
++class CamilleProject(private val mainFile: File) {
++
++    companion object {
++        private val FIRST_WORD = Regex("""\A(?:\s|//[^\n]*|/\*[\s\S]*?\*/)*([A-Za-z_]+)""")
++
++        /** Camille keywords are lowercase, so classical B (MACHINE ...) never matches. */
++        fun isCamille(text: String) = FIRST_WORD.find(text)?.groupValues?.get(1) in setOf("machine", "context")
++    }
++
++    private class Component(val file: File, val unit: PParseUnit)
++
++    private class ContextInfo(val env: ITypeEnvironmentBuilder, val declared: Set<String>)
++
++    private class EventInfo(val parameters: Map<String, org.eventb.core.ast.Type>)
++
++    private class MachineInfo(
++        val env: ITypeEnvironmentBuilder,
++        val declared: Set<String>,
++        val variables: List<String>,
++        val events: Map<String, EventInfo>,
++    )
++
++    private enum class Kind { PREDICATE, EXPRESSION, ASSIGNMENT }
++
++    private val factory = FormulaFactory.getDefault()
++    private val components = LinkedHashMap<String, Component>()
++    private val diagnostics = mutableListOf<Diagnostic>()
++    private val contexts = HashMap<String, ContextInfo?>()
++    private val machines = HashMap<String, MachineInfo?>()
++    private var main: Component? = null
++
++    /** Parses and type-checks the main file and every component it depends on. */
++    fun check(): List<Diagnostic> {
++        main = load(mainFile, null, null) ?: return diagnostics
++        when (val unit = main!!.unit) {
++            is AMachineParseUnit -> checkMachine(unit.name.text)
++            is AContextParseUnit -> checkContext(unit.name.text)
++        }
++        return diagnostics
++    }
++
++    // ----------------------------------------------------------------------
++    // Loading
++
++    private fun load(file: File, referencedFrom: Component?, reference: Token?): Component? {
++        if (!file.isFile) {
++            if (referencedFrom != null && reference != null) {
++                report(referencedFrom.file, reference, "Component '${reference.text}' not found, expected it in ${file.name}")
++            }
++            return null
++        }
++        val unit = try {
++            EventBParser().parse(file.readText()).pParseUnit
++        } catch (e: BException) {
++            reportParseError(file, e)
++            return null
++        }
++        val component = Component(file, unit)
++        val name = when (unit) {
++            is AMachineParseUnit -> unit.name
++            is AContextParseUnit -> unit.name
++            else -> return null
++        }
++        components[name.text] = component
++        return component
++    }
++
++    /** Finds a referenced component next to the file that references it. */
++    private fun resolve(from: Component, name: TIdentifierLiteral): Component? {
++        components[name.text]?.let { return it }
++        val dir = from.file.absoluteFile.parentFile
++        val candidates = listOf(from.file.extension, "mch").distinct().map { File(dir, "${name.text}.$it") }
++        val file = candidates.firstOrNull { it.isFile } ?: candidates.first()
++        return load(file, from, name)
++    }
++
++    private fun reportParseError(file: File, e: BException) {
++        // SableCC prefixes messages with "[line,pos]"; the range already says where.
++        fun message(raw: String?) = raw?.replace(Regex("""^\[\d+,\d+]\s*"""), "") ?: "Syntax error"
++        when (val cause = e.cause) {
++            is EventBParseException -> {
++                val token = cause.token
++                if (token != null) report(file, token, message(cause.message))
++                else report(file, 1, 1, 1, message(cause.message))
++            }
++            is EventBLexerException ->
++                report(file, cause.lastLine, cause.lastPos, cause.lastText?.length ?: 1, message(cause.message))
++            is LexerException -> {
++                val position = Regex("""\[(\d+),(\d+)]\s*(.*)""").find(cause.message ?: "")
++                if (position != null) {
++                    val (line, pos, message) = position.destructured
++                    report(file, line.toInt(), pos.toInt(), 1, message)
++                } else {
++                    report(file, 1, 1, 1, cause.message ?: "Syntax error")
++                }
++            }
++            else -> report(file, 1, 1, 1, e.message ?: "Syntax error")
++        }
++    }
++
++    // ----------------------------------------------------------------------
++    // Static checks, following Rodin's static checker
++
++    private fun checkContext(name: String): ContextInfo? {
++        if (name in contexts) return contexts[name]
++        contexts[name] = null // guards against cyclic extends
++        val component = components[name] ?: return null
++        val unit = component.unit as? AContextParseUnit ?: return null
++
++        val env = factory.makeTypeEnvironment()
++        val declared = mutableSetOf<String>()
++        for (extended in unit.extendsNames) {
++            val target = resolve(component, extended) ?: continue
++            if (target.unit !is AContextParseUnit) {
++                report(component.file, extended, "'${extended.text}' is not a context")
++                continue
++            }
++            val info = checkContext(extended.text) ?: continue
++            env.addAll(info.env)
++            declared += info.declared
++        }
++        for (set in unit.sets.filterIsInstance<ACarrierSet>()) {
++            env.addGivenSet(set.name.text)
++            declared += set.name.text
++        }
++        val constants = unit.constants.filterIsInstance<AConstant>().map { it.name }
++        declared += constants.map { it.text }
++        var typed = true
++        for (axiom in unit.axioms) {
++            val (label, predicate) = when (axiom) {
++                is AAxiom -> axiom.name to axiom.predicate
++                is ADerivedAxiom -> axiom.name to axiom.predicate
++                else -> continue
++            }
++            typed = checkFormula(component.file, label, predicate, Kind.PREDICATE, env, declared) && typed
++        }
++        // Missing types are only worth reporting if the axioms themselves were fine.
++        for (constant in constants.takeIf { typed }.orEmpty()) {
++            if (!env.contains(constant.text)) {
++                report(component.file, constant, "Constant '${constant.text}' has no type; add an axiom such as ${constant.text} ∈ S")
++            }
++        }
++        return ContextInfo(env, declared).also { contexts[name] = it }
++    }
++
++    private fun checkMachine(name: String): MachineInfo? {
++        if (name in machines) return machines[name]
++        machines[name] = null // guards against cyclic refinement
++        val component = components[name] ?: return null
++        val unit = component.unit as? AMachineParseUnit ?: return null
++
++        val env = factory.makeTypeEnvironment()
++        val declared = mutableSetOf<String>()
++
++        var abstract: MachineInfo? = null
++        unit.refinesNames.firstOrNull()?.let { refined ->
++            val target = resolve(component, refined) ?: return@let
++            if (target.unit !is AMachineParseUnit) {
++                report(component.file, refined, "'${refined.text}' is not a machine")
++                return@let
++            }
++            abstract = checkMachine(refined.text)
++            abstract?.let {
++                env.addAll(it.env)
++                declared += it.declared
++            }
++        }
++        for (seen in unit.seenNames) {
++            val target = resolve(component, seen) ?: continue
++            if (target.unit !is AContextParseUnit) {
++                report(component.file, seen, "'${seen.text}' is not a context")
++                continue
++            }
++            val info = checkContext(seen.text) ?: continue
++            env.addAll(info.env)
++            declared += info.declared
++        }
++
++        val variables = unit.variables.filterIsInstance<AVariable>().map { it.name }
++        declared += variables.map { it.text }
++        var typed = true
++        for (invariant in unit.invariants) {
++            val (label, predicate) = when (invariant) {
++                is AInvariant -> invariant.name to invariant.predicate
++                is ADerivedInvariant -> invariant.name to invariant.predicate
++                else -> continue
++            }
++            typed = checkFormula(component.file, label, predicate, Kind.PREDICATE, env, declared) && typed
++        }
++        for (variable in variables.takeIf { typed }.orEmpty()) {
++            if (!env.contains(variable.text)) {
++                report(component.file, variable, "Variable '${variable.text}' has no type; add an invariant such as ${variable.text} ∈ S")
++            }
++        }
++        (unit.variant as? AVariant)?.let { variant ->
++            checkFormula(component.file, null, variant.expression, Kind.EXPRESSION, env.makeBuilder(), declared)
++        }
++
++        val allVariables = variables.map { it.text } + abstract?.variables.orEmpty()
++        val events = mutableMapOf<String, EventInfo>()
++        for (event in unit.events.filterIsInstance<AEvent>()) {
++            events[event.name.text] = checkEvent(component, event, abstract, env, declared, allVariables)
++        }
++        return MachineInfo(env, declared, variables.map { it.text }, events).also { machines[name] = it }
++    }
++
++    private fun checkEvent(
++        component: Component,
++        event: AEvent,
++        abstract: MachineInfo?,
++        machineEnv: ITypeEnvironmentBuilder,
++        machineDeclared: Set<String>,
++        variables: List<String>,
++    ): EventInfo {
++        val env = machineEnv.makeBuilder()
++        val declared = machineDeclared.toMutableSet()
++
++        val refinement = event.refinement
++        val abstractEvent = when (refinement) {
++            is AExtendedEventRefinement -> abstract?.events?.get(refinement.name.text)
++            is ARefinesEventRefinement -> refinement.names.firstOrNull()?.let { abstract?.events?.get(it.text) }
++            else -> if (event.name.text == "INITIALISATION") abstract?.events?.get("INITIALISATION") else null
++        }
++        if (abstract != null && refinement != null && abstractEvent == null) {
++            val target = when (refinement) {
++                is AExtendedEventRefinement -> refinement.name
++                is ARefinesEventRefinement -> refinement.names.first()
++                else -> null
++            }
++            target?.let { report(component.file, it, "The abstract machine has no event '${it.text}'") }
++        }
++        if (refinement is AExtendedEventRefinement && abstractEvent != null) {
++            abstractEvent.parameters.forEach { (name, type) -> env.addName(name, type) }
++            declared += abstractEvent.parameters.keys
++        }
++
++        val parameters = event.parameters.filterIsInstance<AParameter>().map { it.name }
++        declared += parameters.map { it.text }
++        var typed = true
++        for (guard in event.guards) {
++            val (label, predicate) = when (guard) {
++                is AGuard -> guard.name to guard.predicate
++                is ADerivedGuard -> guard.name to guard.predicate
++                else -> continue
++            }
++            typed = checkFormula(component.file, label, predicate, Kind.PREDICATE, env, declared) && typed
++        }
++        for (parameter in parameters.takeIf { typed }.orEmpty()) {
++            if (!env.contains(parameter.text)) {
++                report(component.file, parameter, "Parameter '${parameter.text}' has no type; add a guard such as ${parameter.text} ∈ S")
++            }
++        }
++
++        // Witnesses may mention the after-values of variables and abstract parameters.
++        val witnessEnv = env.makeBuilder()
++        val witnessDeclared = declared.toMutableSet()
++        for (variable in variables) {
++            if (env.contains(variable) && !witnessEnv.contains("$variable'")) {
++                witnessEnv.addName("$variable'", env.getType(variable))
++                witnessDeclared += "$variable'"
++            }
++        }
++        abstractEvent?.parameters?.forEach { (name, type) ->
++            if (!witnessEnv.contains(name)) witnessEnv.addName(name, type)
++            witnessDeclared += name
++        }
++        for (witness in event.witnesses.filterIsInstance<AWitness>()) {
++            checkFormula(component.file, witness.name, witness.predicate, Kind.PREDICATE, witnessEnv, witnessDeclared)
++        }
++
++        for (action in event.actions.filterIsInstance<AAction>()) {
++            checkFormula(component.file, action.name, action.action, Kind.ASSIGNMENT, env.makeBuilder(), declared)
++        }
++
++        val parameterTypes = parameters.map { it.text }.filter { env.contains(it) }.associateWith { env.getType(it) }
++        val inherited = if (refinement is AExtendedEventRefinement) abstractEvent?.parameters.orEmpty() else emptyMap()
++        return EventInfo(inherited + parameterTypes)
++    }
++
++    /**
++     * Parses and type-checks one formula. Inferred types are added to [env],
++     * which is how constants, variables and parameters get their types.
++     */
++    private fun checkFormula(
++        file: File,
++        label: TLabel?,
++        formula: TFormula,
++        kind: Kind,
++        env: ITypeEnvironmentBuilder,
++        declared: Set<String>,
++    ): Boolean {
++        val text = formula.text
++        val result: IParseResult = when (kind) {
++            Kind.PREDICATE -> factory.parsePredicate(text, null)
++            Kind.EXPRESSION -> factory.parseExpression(text, null)
++            Kind.ASSIGNMENT -> factory.parseAssignment(text, null)
++        }
++        result.problems.forEach { report(file, formula, it) }
++        if (result.hasProblem()) return false
++
++        val parsed: Formula<*> = when (kind) {
++            Kind.PREDICATE -> result.parsedPredicate
++            Kind.EXPRESSION -> result.parsedExpression
++            Kind.ASSIGNMENT -> result.parsedAssignment
++        }
++        val undeclared = parsed.freeIdentifiers.filter { it.name !in declared }
++        for (identifier in undeclared) {
++            report(file, formula, identifier.sourceLocation, "Identifier '${identifier.name}' has not been declared", DiagnosticSeverity.Error)
++        }
++        if (undeclared.isNotEmpty()) return false
++
++        val typeCheck = parsed.typeCheck(env)
++        typeCheck.problems.forEach { report(file, formula, it) }
++        if (!typeCheck.hasProblem()) {
++            env.addAll(typeCheck.inferredEnvironment)
++        } else if (label != null && typeCheck.problems.none { it.sourceLocation != null }) {
++            report(file, label, "Type error in ${label.text}")
++        }
++        return !typeCheck.hasProblem()
++    }
++
++    // ----------------------------------------------------------------------
++    // Diagnostics
++
++    private fun report(file: File, formula: TFormula, problem: ASTProblem) {
++        val severity = if (problem.isError) DiagnosticSeverity.Error else DiagnosticSeverity.Warning
++        report(file, formula, problem.sourceLocation, problem.toString(), severity)
++    }
++
++    /** Reports a problem at a [location] inside [formula], whose text may span lines. */
++    private fun report(file: File, formula: TFormula, location: SourceLocation?, message: String, severity: DiagnosticSeverity) {
++        val text = formula.text
++        val start = location?.start ?: 0
++        val end = (location?.end ?: (text.length - 1)) + 1
++        diagnostics += Diagnostic(
++            Range(offsetToPosition(formula, start), offsetToPosition(formula, end.coerceAtMost(text.length))),
++            message, severity, file.toURI().path,
++        )
++    }
++
++    private fun offsetToPosition(formula: TFormula, offset: Int): Position {
++        var line = formula.line - 1
++        var column = formula.pos - 1
++        for (char in formula.text.substring(0, offset.coerceIn(0, formula.text.length))) {
++            if (char == '\n') {
++                line++
++                column = 0
++            } else {
++                column++
++            }
++        }
++        return Position(line, column)
++    }
++
++    private fun report(file: File, token: Token, message: String) =
++        report(file, token.line, token.pos, token.text.length, message)
++
++    private fun report(file: File, line: Int, pos: Int, length: Int, message: String) {
++        val start = Position((line - 1).coerceAtLeast(0), (pos - 1).coerceAtLeast(0))
++        diagnostics += Diagnostic(
++            Range(start, Position(start.line, start.character + length.coerceAtLeast(1))),
++            message, DiagnosticSeverity.Error, file.toURI().path,
++        )
++    }
++
++    // ----------------------------------------------------------------------
++    // Translation to prob-java
++
++    /** Builds the prob-java model of all components; returns it with the main component. */
++    fun toModel(empty: EventBModel): Pair<EventBModel, AbstractElement> {
++        val noExtensions = emptySet<org.eventb.core.ast.extension.IFormulaExtension>()
++        val contextModels = HashMap<String, Context>()
++        val machineModels = HashMap<String, EventBMachine>()
++        var model = empty
++
++        fun context(name: String): Context? {
++            contextModels[name]?.let { return it }
++            val unit = components[name]?.unit as? AContextParseUnit ?: return null
++            val extended = unit.extendsNames.mapNotNull { context(it.text) }
++            val built = Context(name)
++                .withExtends(ModelElementList(extended))
++                .withSets(ModelElementList(unit.sets.filterIsInstance<ACarrierSet>().map { ProBSet(EventB(it.name.text, noExtensions)) }))
++                .withConstants(ModelElementList(unit.constants.filterIsInstance<AConstant>().map { EventBConstant(it.name.text, false, null) }))
++                .withAxioms(ModelElementList(unit.axioms.mapNotNull {
++                    when (it) {
++                        is AAxiom -> EventBAxiom(it.name.text, it.predicate.text, false, noExtensions)
++                        is ADerivedAxiom -> EventBAxiom(it.name.text, it.predicate.text, true, noExtensions)
++                        else -> null
++                    }
++                }))
++            contextModels[name] = built
++            model = model.addContext(built)
++            extended.forEach { model = model.addRelationship(name, it.name, ERefType.EXTENDS) }
++            return built
++        }
++
++        fun machine(name: String): EventBMachine? {
++            machineModels[name]?.let { return it }
++            val unit = components[name]?.unit as? AMachineParseUnit ?: return null
++            val abstract = unit.refinesNames.firstOrNull()?.let { machine(it.text) }
++            val sees = unit.seenNames.mapNotNull { context(it.text) }
++
++            val events = unit.events.filterIsInstance<AEvent>().map { event ->
++                val type = when (event.convergence) {
++                    is AConvergentConvergence -> Event.EventType.CONVERGENT
++                    is AAnticipatedConvergence -> Event.EventType.ANTICIPATED
++                    else -> Event.EventType.ORDINARY
++                }
++                val refinement = event.refinement
++                val (inheritance, parentName) = when (refinement) {
++                    is AExtendedEventRefinement -> Event.Inheritance.EXTENDS to refinement.name.text
++                    is ARefinesEventRefinement -> Event.Inheritance.REFINES to refinement.names.firstOrNull()?.text
++                    else -> Event.Inheritance.NONE to (if (event.name.text == "INITIALISATION") "INITIALISATION" else null)
++                }
++                Event(event.name.text, type, inheritance)
++                    .withParentEvent(parentName?.let { abstract?.getEvent(it) })
++                    .withParameters(ModelElementList(event.parameters.filterIsInstance<AParameter>().map { EventParameter(it.name.text) }))
++                    .withGuards(ModelElementList(event.guards.mapNotNull {
++                        when (it) {
++                            is AGuard -> EventBGuard(it.name.text, it.predicate.text, false, noExtensions)
++                            is ADerivedGuard -> EventBGuard(it.name.text, it.predicate.text, true, noExtensions)
++                            else -> null
++                        }
++                    }))
++                    .withWitnesses(ModelElementList(event.witnesses.filterIsInstance<AWitness>().map { Witness(it.name.text, it.predicate.text, noExtensions) }))
++                    .withActions(ModelElementList(event.actions.filterIsInstance<AAction>().map { EventBAction(it.name.text, it.action.text, noExtensions) }))
++            }
++
++            var built = EventBMachine(name)
++                .withRefinesMachine(abstract)
++                .withSees(ModelElementList(sees))
++                .withVariables(ModelElementList(unit.variables.filterIsInstance<AVariable>().map { EventBVariable(it.name.text, null) }))
++                .withInvariants(ModelElementList(unit.invariants.mapNotNull {
++                    when (it) {
++                        is AInvariant -> EventBInvariant(it.name.text, it.predicate.text, false, noExtensions)
++                        is ADerivedInvariant -> EventBInvariant(it.name.text, it.predicate.text, true, noExtensions)
++                        else -> null
++                    }
++                }))
++                .withEvents(ModelElementList(events))
++            (unit.variant as? AVariant)?.let { built = built.withVariant(Variant(it.expression.text, noExtensions)) }
++
++            machineModels[name] = built
++            model = model.addMachine(built)
++            abstract?.let { model = model.addRelationship(name, it.name, ERefType.REFINES) }
++            sees.forEach { model = model.addRelationship(name, it.name, ERefType.SEES) }
++            return built
++        }
++
++        val mainComponent: AbstractElement = when (val unit = main!!.unit) {
++            is AMachineParseUnit -> machine(unit.name.text)!!
++            else -> context((unit as AContextParseUnit).name.text)!!
++        }
++        return model to mainComponent
++    }
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
+index 9992b9d..1817746 100644
+--- a/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
+@@ -10,9 +10,11 @@ import de.prob.animator.command.CheckWellDefinednessCommand
+ import de.prob.animator.domainobjects.ErrorItem
+ import de.prob.exception.ProBError
+ import de.prob.scripting.FactoryProvider
+-import de.prob.scripting.ModelFactory
++import de.prob.model.eventb.EventBModel
+ import de.prob.statespace.AnimationSelector
++import de.prob.statespace.StateSpace
+ import org.eclipse.lsp4j.Diagnostic
++import org.eclipse.lsp4j.DiagnosticSeverity
+ import org.eclipse.lsp4j.MessageType
+ import java.io.File
+ import java.io.IOException
+@@ -39,6 +41,11 @@ class ProBKernel @Inject constructor(private val injector : Injector,
+         communicator.sendDebugMessage("unloading old machine", MessageType.Info)
+         unloadMachine()
+ 
++        // Event-B in Camille notation shares .mch with classical B; its lowercase keywords tell them apart.
++        if (CamilleProject.isCamille(file.readText())) {
++            return checkCamille(file, settings)
++        }
++
+         val factory = injector.getInstance(FactoryProvider.factoryClassFromExtension(file.absolutePath.substringAfterLast(".")))
+ 
+         val informationListener = InformationListener(file, communicator)
+@@ -46,20 +53,40 @@ class ProBKernel @Inject constructor(private val injector : Injector,
+ 
+         communicator.sendDebugMessage("loading new machine", MessageType.Info)
+ 
+-        val problems = loadMachine(settings, file, factory)
++        val problems = loadMachine(settings, file) { stateSpace -> factory.extract(file.absolutePath).loadIntoStateSpace(stateSpace) }
+ 
+         communicator.sendDebugMessage("returning from kernel problems are $problems", MessageType.Info)
+ 
+         return listOf(informationListener.getInformation(), problems).flatten()
+     }
+ 
++    /**
++     * Checks an Event-B component in Camille notation: Rodin-style static checks first, then ProB
++     * @param file the machine or context to check
++     * @param settings the settings under which the check takes place
++     * @return a list with the problems found
++     */
++    private fun checkCamille(file : File, settings : ProBSettings) : List<Diagnostic> {
++        val project = CamilleProject(file)
++        val problems = project.check()
++        if (problems.any { it.severity == DiagnosticSeverity.Error }) {
++            return problems
++        }
++
++        communicator.sendDebugMessage("loading Event-B model", MessageType.Info)
++        return problems + loadMachine(settings, file) { stateSpace ->
++            val (model, mainComponent) = project.toModel(injector.getInstance(EventBModel::class.java))
++            model.loadIntoStateSpace(stateSpace, mainComponent)
++        }
++    }
++
+     /**
+      * Does the main work
+      * @param settings the settings of the document
+      * @param file the path to the document
+-     * @param factory a factory
++     * @param load loads the model into the given state space
+      */
+-    private fun loadMachine(settings: ProBSettings, file : File, factory : ModelFactory<*>): List<Diagnostic> {
++    private fun loadMachine(settings: ProBSettings, file : File, load : (StateSpace) -> Unit): List<Diagnostic> {
+         communicator.sendDebugMessage("creating new state space", MessageType.Info)
+ 
+         val newStateSpace = animator.createStateSpace()
+@@ -69,7 +96,7 @@ class ProBKernel @Inject constructor(private val injector : Injector,
+         val errors = mutableListOf<ErrorItem>()
+ 
+         try {
+-            factory.extract(file.absolutePath).loadIntoStateSpace(newStateSpace)
++            load(newStateSpace)
+         } catch (e: IOException) {
+             communicator.sendDebugMessage("IOException ${e.message}", MessageType.Info)
+         } catch (e : ProBError){

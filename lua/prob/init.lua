@@ -26,6 +26,17 @@ local function show_message(err, result, ctx)
   return vim.lsp.handlers['window/showMessage'](err, result, ctx)
 end
 
+--- Filetype of a B file: Event-B in Camille notation (`machine m0`,
+--- `context c0`) uses lowercase keywords, classical B (`MACHINE M`) uppercase.
+---@param bufnr integer
+---@return 'b'|'eventb'
+function M.detect(bufnr)
+  local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, 100, false), '\n')
+  text = text:gsub('/%*.-%*/', ' '):gsub('//[^\n]*', ' ')
+  local word = text:match('^%s*([%a_]+)')
+  return (word == 'machine' or word == 'context') and 'eventb' or 'b'
+end
+
 --- Whether the configured language server can be started.
 function M.has_server()
   return vim.fn.executable(M.config.lsp.cmd[1]) == 1
@@ -37,8 +48,11 @@ local function enable_quickfix_checker()
   vim.api.nvim_create_autocmd({ 'BufReadPost', 'BufWritePost' }, {
     group = group,
     pattern = { '*.mch', '*.ref', '*.imp', '*.rmch' },
-    callback = function()
-      vim.fn['probcli#Check']()
+    callback = function(args)
+      -- probcli cannot load Event-B in Camille notation.
+      if vim.bo[args.buf].filetype ~= 'eventb' then
+        vim.fn['probcli#Check']()
+      end
     end,
   })
 end
@@ -46,7 +60,7 @@ end
 local function enable_lsp()
   vim.lsp.config('prob', {
     cmd = M.config.lsp.cmd,
-    filetypes = { 'b' },
+    filetypes = { 'b', 'eventb' },
     root_markers = { '.git' },
     settings = M.config.lsp.settings,
     handlers = { ['window/showMessage'] = show_message },
@@ -57,10 +71,10 @@ end
 local function enable_treesitter()
   vim.api.nvim_create_autocmd('FileType', {
     group = vim.api.nvim_create_augroup('prob_treesitter', { clear = true }),
-    pattern = 'b',
+    pattern = { 'b', 'eventb' },
     callback = function(args)
       -- Without the parser, the regex syntax stays in place.
-      pcall(vim.treesitter.start, args.buf, 'b')
+      pcall(vim.treesitter.start, args.buf, args.match)
     end,
   })
 end

@@ -444,6 +444,11 @@
    "module": "sha256-NugmVt6nQfxDJVmK1YeeOYkGDXtYsy4/sPt0neQIUPs=",
    "pom": "sha256-c013HBOsz6KhwYXu1ebR7ZzLxGcPaV6uZd+ww7bn3aE="
   },
+  "de/hhu/stups#eventbstruct/2.16.1": {
+   "jar": "sha256-suq75wfbv5ULNHZQHT930LjaqI3zHaKcBqXUFwatxoc=",
+   "module": "sha256-rnl+XC0soaPSHdt/pjt9qFUCpM5hBX+AiTTUYcZdmJs=",
+   "pom": "sha256-PrrDha59V2vpU5LNjd7gHk1q21qN7i+c9j9h3CZ2aAo="
+  },
   "de/hhu/stups#ltl-dsl/0.2.2": {
    "jar": "sha256-fKDWe73xA+Wz21DYeDQxlIsOq/DjZ2fToW5aTd5FqCY=",
    "module": "sha256-8lc2TD78weG3VWzRqHK9ejCnHGYmiqOtuIMCJZHofEM=",

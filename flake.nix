@@ -22,11 +22,20 @@
         src = ./tree-sitter-b;
       };
 
-      # Runtime directory holding the compiled parser where Neovim looks for it.
-      parser-rtp = pkgs.runCommand "tree-sitter-b-rtp" { } ''
+      tree-sitter-eventb = pkgs.tree-sitter.buildGrammar {
+        language = "eventb";
+        version = "0.1.0";
+        src = ./tree-sitter-eventb;
+      };
+
+      linkParsers = ''
         mkdir -p $out/parser
         ln -s ${tree-sitter-b}/parser $out/parser/b.so
+        ln -s ${tree-sitter-eventb}/parser $out/parser/eventb.so
       '';
+
+      # Runtime directory holding the compiled parsers where Neovim looks for them.
+      parser-rtp = pkgs.runCommand "tree-sitter-prob-rtp" { } linkParsers;
 
       prob-nvim = pkgs.vimUtils.buildVimPlugin {
         pname = "prob.vim";
@@ -43,10 +52,7 @@
             ./LICENSE
           ];
         };
-        postInstall = ''
-          mkdir -p $out/parser
-          ln -s ${tree-sitter-b}/parser $out/parser/b.so
-        '';
+        postInstall = linkParsers;
       };
 
       # Start an editor with only this checkout of prob.vim on the runtimepath.
@@ -91,34 +97,59 @@
     in
     {
       packages.${system} = {
-        inherit prob b-language-server tree-sitter-b prob-nvim;
+        inherit
+          prob
+          b-language-server
+          tree-sitter-b
+          tree-sitter-eventb
+          prob-nvim
+          ;
         default = prob-nvim;
       };
 
-      checks.${system} = {
-        tree-sitter-b-corpus = pkgs.runCommand "tree-sitter-b-corpus" {
-          nativeBuildInputs = [ pkgs.tree-sitter pkgs.stdenv.cc ];
-        } ''
-          cp -r ${./tree-sitter-b} grammar
-          chmod -R u+w grammar
-          cd grammar
-          export HOME=$TMPDIR
-          tree-sitter test
-          touch $out
-        '';
+      checks.${system} =
+        let
+          corpus =
+            name: src:
+            pkgs.runCommand "${name}-corpus"
+              {
+                nativeBuildInputs = [
+                  pkgs.tree-sitter
+                  pkgs.stdenv.cc
+                ];
+              }
+              ''
+                cp -r ${src} grammar
+                chmod -R u+w grammar
+                cd grammar
+                export HOME=$TMPDIR
+                tree-sitter test
+                touch $out
+              '';
+        in
+        {
+          tree-sitter-b-corpus = corpus "tree-sitter-b" ./tree-sitter-b;
+          tree-sitter-eventb-corpus = corpus "tree-sitter-eventb" ./tree-sitter-eventb;
 
-        lsp-diagnostics = pkgs.runCommand "prob-lsp-diagnostics" {
-          nativeBuildInputs = [ b-language-server prob-lsp-test ];
-        } ''
-          cp -r ${./.} source
-          chmod -R u+w source
-          cd source
-          export HOME=$TMPDIR PROB_VIM_ROOT=$PWD
-          prob-lsp-test > $out 2>&1 || { cat $out; exit 1; }
-          cat $out
-          grep -q 'TestFiles/TypeError.mch:12:20: Type mismatch' $out
-        '';
-      };
+          lsp-diagnostics =
+            pkgs.runCommand "prob-lsp-diagnostics"
+              {
+                nativeBuildInputs = [
+                  b-language-server
+                  prob-lsp-test
+                ];
+              }
+              ''
+                cp -r ${./.} source
+                chmod -R u+w source
+                cd source
+                export HOME=$TMPDIR PROB_VIM_ROOT=$PWD
+                prob-lsp-test > $out 2>&1 || { cat $out; exit 1; }
+                cat $out
+                grep -q 'TestFiles/TypeError.mch:12:20: Type mismatch' $out
+                grep -q "TestFiles/eventb/TypeErrors.mch:23:13: Identifier 'cuont' has not been declared" $out
+              '';
+        };
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [

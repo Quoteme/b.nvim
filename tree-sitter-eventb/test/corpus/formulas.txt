@@ -1,0 +1,244 @@
+================================================================================
+Connectives, relations and arithmetic
+================================================================================
+
+context C
+axioms
+  @axm1 a ∈ ℕ ∧ b = a + 2 ∗ c ^ 2 ⇒ ¬(a = b) ∨ c ≤ 1
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (axioms_clause
+      (axiom
+        (label)
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (identifier)
+              (builtin_set))
+            (binary_formula
+              (identifier)
+              (binary_formula
+                (identifier)
+                (binary_formula
+                  (integer)
+                  (binary_formula
+                    (identifier)
+                    (integer))))))
+          (binary_formula
+            (unary_formula
+              (parenthesized_formula
+                (binary_formula
+                  (identifier)
+                  (identifier))))
+            (binary_formula
+              (identifier)
+              (integer))))))))
+
+================================================================================
+Quantifier bodies extend to the right
+================================================================================
+
+context C
+axioms
+  @axm1 ∀x·x ∈ S ⇒ x ≠ k
+  @axm2 ∃x,y·x ↦ y ∈ r ∧ x ≠ y
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (axioms_clause
+      (axiom
+        (label)
+        (quantified_predicate
+          (identifier_list
+            (identifier))
+          (binary_formula
+            (binary_formula
+              (identifier)
+              (identifier))
+            (binary_formula
+              (identifier)
+              (identifier)))))
+      (axiom
+        (label)
+        (quantified_predicate
+          (identifier_list
+            (identifier)
+            (identifier))
+          (binary_formula
+            (binary_formula
+              (binary_formula
+                (identifier)
+                (identifier))
+              (identifier))
+            (binary_formula
+              (identifier)
+              (identifier))))))))
+
+================================================================================
+Relations, functions and sets
+================================================================================
+
+context C
+axioms
+  @axm1 f ∈ S ⇸ T ∧ r ∈ S ↔ T
+  @axm2 g = (r ∪ {a ↦ b})∼[{c}] ∧ dom(f) ⊆ ran(r)
+  @axm3 sq = (λx·x ∈ ℕ ∣ x ∗ x) ∧ s = {x·x ∈ ℕ ∧ x < 5 ∣ 2 ∗ x} ∧ t = {x + 1 ∣ x ∈ s}
+  @axm4 card(S) = 3 ∧ f(a) = id(b) ∧ bool(a = b) = TRUE ∧ finite(S)
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (axioms_clause
+      (axiom
+        (label)
+        (binary_formula
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (identifier)
+              (identifier)))
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (identifier)
+              (identifier)))))
+      (axiom
+        (label)
+        (binary_formula
+          (binary_formula
+            (identifier)
+            (image
+              (inverse
+                (parenthesized_formula
+                  (binary_formula
+                    (identifier)
+                    (set_extension
+                      (binary_formula
+                        (identifier)
+                        (identifier))))))
+              (set_extension
+                (identifier))))
+          (binary_formula
+            (builtin_call
+              (builtin_function)
+              (identifier))
+            (builtin_call
+              (builtin_function)
+              (identifier)))))
+      (axiom
+        (label)
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (identifier)
+              (parenthesized_formula
+                (quantified_expression
+                  (identifier)
+                  (binary_formula
+                    (identifier)
+                    (builtin_set))
+                  (binary_formula
+                    (identifier)
+                    (identifier)))))
+            (binary_formula
+              (identifier)
+              (set_comprehension
+                (identifier)
+                (binary_formula
+                  (binary_formula
+                    (identifier)
+                    (builtin_set))
+                  (binary_formula
+                    (identifier)
+                    (integer)))
+                (binary_formula
+                  (integer)
+                  (identifier)))))
+          (binary_formula
+            (identifier)
+            (set_comprehension
+              (binary_formula
+                (identifier)
+                (integer))
+              (binary_formula
+                (identifier)
+                (identifier))))))
+      (axiom
+        (label)
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (binary_formula
+                (builtin_call
+                  (builtin_function)
+                  (identifier))
+                (integer))
+              (binary_formula
+                (call
+                  (identifier)
+                  (identifier))
+                (call
+                  (builtin_constant)
+                  (identifier))))
+            (binary_formula
+              (builtin_call
+                (builtin_function)
+                (binary_formula
+                  (identifier)
+                  (identifier)))
+              (boolean)))
+          (builtin_call
+            (builtin_function)
+            (identifier)))))))
+
+================================================================================
+ASCII notation
+================================================================================
+
+context C
+axioms
+  @axm1 !x.x : NAT => x >= 0 & f : S +-> T & s <: POW(INT)
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (axioms_clause
+      (axiom
+        (label)
+        (quantified_predicate
+          (identifier_list
+            (identifier))
+          (binary_formula
+            (binary_formula
+              (identifier)
+              (builtin_set))
+            (binary_formula
+              (binary_formula
+                (binary_formula
+                  (identifier)
+                  (integer))
+                (binary_formula
+                  (identifier)
+                  (binary_formula
+                    (identifier)
+                    (identifier))))
+              (binary_formula
+                (identifier)
+                (builtin_call
+                  (builtin_function)
+                  (builtin_set))))))))))

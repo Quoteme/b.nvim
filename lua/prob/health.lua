@@ -28,12 +28,14 @@ function M.check()
     health.error('Neither the language server nor probcli is available')
   end
 
-  if pcall(vim.treesitter.language.add, 'b') then
-    health.ok('Tree-sitter parser `b` found')
-  else
-    health.warn('Tree-sitter parser `b` not found, falling back to regex highlighting', {
-      'Build it from the tree-sitter-b directory of this plugin, or use the `prob-nvim` Nix package',
-    })
+  for _, lang in ipairs({ 'b', 'eventb' }) do
+    if pcall(vim.treesitter.language.add, lang) then
+      health.ok(('Tree-sitter parser `%s` found'):format(lang))
+    else
+      health.warn(('Tree-sitter parser `%s` not found, no tree-sitter highlighting for it'):format(lang), {
+        ('Build it from the tree-sitter-%s directory of this plugin, or use the `prob-nvim` Nix package'):format(lang),
+      })
+    end
   end
 end
 

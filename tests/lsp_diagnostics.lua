@@ -17,6 +17,7 @@ vim.lsp.config('prob', {
 
 local files = vim.fn.glob('TestFiles/*.mch', false, true)
 vim.list_extend(files, vim.fn.glob('TestFiles/*.rmch', false, true))
+vim.list_extend(files, vim.fn.glob('TestFiles/eventb/*.mch', false, true))
 
 local failed = false
 for _, file in ipairs(files) do

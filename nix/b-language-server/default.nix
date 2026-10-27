@@ -38,10 +38,14 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-qCh+7LzXDtB9mO1lxyoZ+1X7BKqWgtvnuByQDSSeMcc=";
   };
 
-  # Adds a `--stdio` transport, checks documents on open and save only,
-  # tolerates partial client settings, publishes file:// URIs, and matches
-  # prob-java to probcli 1.16.
-  patches = [ ./client-compat.patch ];
+  patches = [
+    # Adds a `--stdio` transport, checks documents on open and save only,
+    # tolerates partial client settings, publishes file:// URIs, and matches
+    # prob-java to probcli 1.16.
+    ./client-compat.patch
+    # Checks Event-B machines and contexts written in Camille notation.
+    ./eventb-camille.patch
+  ];
 
   nativeBuildInputs = [
     gradle

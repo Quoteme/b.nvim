@@ -5,7 +5,9 @@ vim.g.loaded_prob = true
 
 vim.filetype.add({
   extension = {
-    mch = 'b',
+    mch = function(_, bufnr)
+      return require('prob').detect(bufnr)
+    end,
     ref = 'b',
     imp = 'b',
     rmch = 'b',
