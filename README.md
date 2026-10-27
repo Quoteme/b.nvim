@@ -186,6 +186,17 @@ In Neovim, the language server does what Rodin does on save:
   (`inc/inv1/INV does not hold, e.g. for n = 3`), an obligation ProB can
   neither prove nor refute as a hint.
 
+While you type, ASCII combinations become their symbols as in Rodin's editors,
+using Rodin's keyboard table: `:` becomes `∈`, `::` becomes `:∈`, `-->` `→`,
+`NAT` `ℕ`, `!x.` `∀x·`. A combination is replaced once the next character shows
+it is complete, so `<` waits to see whether `<->` follows. Comments and labels
+keep their spelling. `:ProbSymbol` (or `require('prob').pick_symbol()`) picks a
+symbol from a list and inserts it, for example:
+
+```lua
+vim.keymap.set({ 'n', 'i' }, '<C-s>', require('prob').pick_symbol, { desc = 'Event-B symbol' })
+```
+
 Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 
 - **model check**, which reports deadlocks and invariant violations with the
@@ -216,6 +227,7 @@ require('prob').setup({
     },
   },
   treesitter = true, -- false keeps the regex syntax
+  keyboard = true, -- false keeps ASCII combinations as typed in Event-B
 })
 ```
 
@@ -233,7 +245,8 @@ tree-sitter CLI, plus:
 
 - `nvim-prob` / `vim-prob`: start the editor with only this checkout loaded
 - `prob-spec [filter]`: run the specs in `tests/spec/`, each a small model
-  taken from the [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/)
+  taken from the [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/),
+  the [Rodin keyboard](https://wiki.event-b.org/index.php/Rodin_Keyboard_User_Guide)
   or the [ProB syntax summary](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax),
   with the diagnostics the documentation calls for
 - `prob-vim-test`: print the quickfix entries Vim reports for `TestFiles/`

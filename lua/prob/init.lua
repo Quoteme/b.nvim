@@ -20,6 +20,8 @@ M.config = {
     },
   },
   treesitter = true,
+  -- Replace ASCII combinations by Event-B symbols while typing, like Rodin.
+  keyboard = true,
 }
 
 local function show_message(err, result, ctx)
@@ -107,6 +109,21 @@ local function enable_treesitter()
   })
 end
 
+local function enable_keyboard()
+  vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('prob_keyboard', { clear = true }),
+    pattern = 'eventb',
+    callback = function(args)
+      require('prob.keyboard').attach(args.buf)
+    end,
+  })
+end
+
+--- Lets the user pick an Event-B symbol and inserts it at the cursor.
+function M.pick_symbol()
+  require('prob.keyboard').pick()
+end
+
 function M.enable()
   if M.has_server() then
     pcall(vim.api.nvim_del_augroup_by_name, 'prob')
@@ -119,6 +136,12 @@ function M.enable()
   else
     pcall(vim.api.nvim_del_augroup_by_name, 'prob_treesitter')
   end
+  if M.config.keyboard then
+    enable_keyboard()
+  else
+    pcall(vim.api.nvim_del_augroup_by_name, 'prob_keyboard')
+  end
+  vim.api.nvim_create_user_command('ProbSymbol', M.pick_symbol, { desc = 'Insert an Event-B symbol' })
 end
 
 ---@param opts? prob.Config

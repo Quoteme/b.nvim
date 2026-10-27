@@ -69,6 +69,10 @@ local function compare(expected, actual)
 end
 
 local function run(spec)
+  if spec.typed then
+    local text = require('prob.keyboard').translate(spec.typed)
+    return text == spec.text and {} or { ('typed %q, got %q, expected %q'):format(spec.typed, text, spec.text) }
+  end
   local dir = vim.fn.tempname()
   vim.fn.mkdir(dir, 'p')
   local open = spec.open
