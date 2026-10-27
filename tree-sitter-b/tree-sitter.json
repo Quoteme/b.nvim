@@ -1,0 +1,22 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "b",
+      "camelcase": "B",
+      "title": "B",
+      "scope": "source.b",
+      "file-types": ["mch", "ref", "imp", "rmch"],
+      "highlights": "../queries/b/highlights.scm",
+      "locals": "../queries/b/locals.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "EPL-2.0",
+    "description": "Classical B (B-Method) grammar for tree-sitter, as accepted by ProB",
+    "links": {
+      "repository": "https://github.com/Quoteme/prob.vim"
+    }
+  }
+}

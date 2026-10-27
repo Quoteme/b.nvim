@@ -7,6 +7,8 @@ if exists("g:loaded_probcli")
 endif
 
 let g:loaded_probcli = 1
+" probcli >= 1.16
+set errorformat+=%E\!\ An\ error\ occurred\ (source:\ %m)\ \!,%Z\!\ Line:\ %l\ Column:\ %c\ until\ %.%#\ in\ file:\ %f,%C\!\ %m
 set errorformat+=%E\!\ An\ error\ occurred\ \!,%Z\!\ Line:\ %l\ Column:\ %c\ %s\ in\ file:\ %f,%C\!\ source(%m),%C\!\ %m,%-G%.%#
 " old error formats
 set errorformat+=%E\!\ source(parse_error),%C\!\ [%*\\d\\,%*\\d]\ %m\ in\ file%.%#
@@ -18,11 +20,36 @@ end
 
 function! probcli#Check() "{{{1
   let cmd=g:prob_parser ." -p MAX_INITIALISATIONS 0 -p show_full_error_span true ". @%
-  if v:version < 800
-    call s:ProbSync(cmd)
-  else
+  if has('nvim')
+    call s:ProbAsyncNvim(cmd)
+  elseif exists('*job_start')
     call s:ProbAsync(cmd)
+  else
+    call s:ProbSync(cmd)
   endif
+endfunction
+
+function! s:ProbAsyncNvim(cmd)
+  if exists('g:backgroundProBOutput')
+    return
+  endif
+  cclose
+  "
+  let g:backgroundProBOutput = []
+  let l:options = {'on_stderr': function('s:NvimErrorCallback'), 'stderr_buffered': v:true, 'on_exit': function('s:NvimExitCallback')}
+
+  if jobstart(a:cmd, l:options) <= 0
+    unlet g:backgroundProBOutput
+    call s:ProbSync(a:cmd)
+  endif
+endfunction
+
+function! s:NvimErrorCallback(job_id, data, event)
+  let g:backgroundProBOutput += filter(copy(a:data), 'v:val !=# ""')
+endfunction
+
+function! s:NvimExitCallback(job_id, code, event)
+  call probcli#closeCallback(a:job_id)
 endfunction
 
 function! s:ProbAsync(cmd)

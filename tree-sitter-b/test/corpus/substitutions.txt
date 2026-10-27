@@ -1,0 +1,212 @@
+================================================================================
+Sequential and parallel composition
+================================================================================
+
+MACHINE M
+INITIALISATION a := 1 || b := 2; c :: S; d : (d > 0); skip
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (initialisation_clause
+      (sequential_substitution
+        (parallel_substitution
+          (assignment
+            (identifier)
+            (integer))
+          (assignment
+            (identifier)
+            (integer)))
+        (becomes_element_of
+          (identifier)
+          (identifier))
+        (becomes_such_that
+          (identifier)
+          (binary_formula
+            (identifier)
+            (integer)))
+        (skip)))))
+
+================================================================================
+Control structures
+================================================================================
+
+MACHINE M
+OPERATIONS
+  op = BEGIN
+    IF x = 1 THEN y := 1 ELSIF x = 2 THEN y := 2 ELSE y := 3 END;
+    SELECT x > 0 THEN y := 1 WHEN x < 0 THEN y := 2 ELSE skip END;
+    CASE x OF EITHER 1, 2 THEN y := 1 OR 3 THEN y := 2 ELSE skip END END;
+    CHOICE y := 1 OR y := 2 END;
+    ANY z WHERE z : NAT THEN y := z END;
+    VAR t IN t := 1; y := t END;
+    LET u BE u = 1 IN y := u END;
+    WHILE i < 10 DO i := i + 1 INVARIANT i <= 10 VARIANT 10 - i END;
+    ASSERT y > 0 THEN skip END
+  END
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (operations_clause
+      (operation
+        (identifier)
+        (block_substitution
+          (sequential_substitution
+            (if_substitution
+              (binary_formula
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (integer))
+              (elsif_substitution
+                (binary_formula
+                  (identifier)
+                  (integer))
+                (assignment
+                  (identifier)
+                  (integer)))
+              (assignment
+                (identifier)
+                (integer)))
+            (select_substitution
+              (binary_formula
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (integer))
+              (binary_formula
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (integer))
+              (skip))
+            (case_substitution
+              (identifier)
+              (integer)
+              (integer)
+              (assignment
+                (identifier)
+                (integer))
+              (integer)
+              (assignment
+                (identifier)
+                (integer))
+              (skip))
+            (choice_substitution
+              (assignment
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (integer)))
+            (any_substitution
+              (identifier_list
+                (identifier))
+              (binary_formula
+                (identifier)
+                (builtin_set))
+              (assignment
+                (identifier)
+                (identifier)))
+            (var_substitution
+              (identifier_list
+                (identifier))
+              (sequential_substitution
+                (assignment
+                  (identifier)
+                  (integer))
+                (assignment
+                  (identifier)
+                  (identifier))))
+            (let_substitution
+              (identifier_list
+                (identifier))
+              (binary_formula
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (identifier)))
+            (while_substitution
+              (binary_formula
+                (identifier)
+                (integer))
+              (assignment
+                (identifier)
+                (binary_formula
+                  (identifier)
+                  (integer)))
+              (binary_formula
+                (identifier)
+                (integer))
+              (binary_formula
+                (integer)
+                (identifier)))
+            (assert_substitution
+              (binary_formula
+                (identifier)
+                (integer))
+              (skip))))))))
+
+================================================================================
+Operation calls and complex assignment targets
+================================================================================
+
+MACHINE M
+OPERATIONS
+  op = BEGIN
+    r1, r2 <-- other(1, 2);
+    reset;
+    log("x");
+    f(1)(2) := 3;
+    rr'field := 4
+  END
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (operations_clause
+      (operation
+        (identifier)
+        (block_substitution
+          (sequential_substitution
+            (operation_call
+              (identifier)
+              (identifier)
+              (identifier)
+              (arguments
+                (integer)
+                (integer)))
+            (operation_call
+              (identifier))
+            (operation_call
+              (identifier)
+              (arguments
+                (string)))
+            (assignment
+              (call
+                (call
+                  (identifier)
+                  (arguments
+                    (integer)))
+                (arguments
+                  (integer)))
+              (integer))
+            (assignment
+              (record_field
+                (identifier)
+                (identifier))
+              (integer))))))))

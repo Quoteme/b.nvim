@@ -1,0 +1,135 @@
+diff --git a/build.gradle.kts b/build.gradle.kts
+index 5aed67c..3a000bc 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -28,7 +28,7 @@ dependencies {
+     // https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-api
+     testImplementation("org.junit.jupiter", "junit-jupiter-engine", "5.14.0")
+ 
+-    implementation(platform("de.hhu.stups:prob-java-bom:4.15.0"))
++    implementation(platform("de.hhu.stups:prob-java-bom:4.16.1"))
+     implementation("de.hhu.stups", "prob-java")
+ }
+ 
+diff --git a/src/main/kotlin/b/language/server/App.kt b/src/main/kotlin/b/language/server/App.kt
+index b22a97c..07a9f79 100644
+--- a/src/main/kotlin/b/language/server/App.kt
++++ b/src/main/kotlin/b/language/server/App.kt
+@@ -8,7 +8,15 @@ import java.net.ServerSocket
+ import java.util.concurrent.Future
+ 
+ 
+-fun main() {
++fun main(args: Array<String>) {
++    if ("--stdio" in args) {
++        // Keep log output of ProB and its dependencies away from the JSON-RPC stream.
++        val out = System.out
++        System.setOut(System.err)
++        startServer(System.`in`, out)
++        return
++    }
++
+     val socket = ServerSocket(0)
+ 
+     println("<${socket.localPort}> is the port; opening connection and listening")
+diff --git a/src/main/kotlin/b/language/server/BDocumentService.kt b/src/main/kotlin/b/language/server/BDocumentService.kt
+index 81cf4c3..e4d9da2 100644
+--- a/src/main/kotlin/b/language/server/BDocumentService.kt
++++ b/src/main/kotlin/b/language/server/BDocumentService.kt
+@@ -26,6 +26,7 @@ class BDocumentService(private val server: ServerInterface,
+      */
+     override fun didOpen(params: DidOpenTextDocumentParams?) {
+         documents[params?.textDocument!!.uri] = params.textDocument!!.text
++        checkDocument(File(URI(params.textDocument.uri).path))
+     }
+ 
+     /**
+@@ -60,6 +61,7 @@ class BDocumentService(private val server: ServerInterface,
+                 val diagnostics: List<Diagnostic> = proBInterface.checkDocument(file, settings)
+ 
+                 val sortedDiagnostic = diagnostics.groupBy { it.source }
++                diagnostics.forEach { it.source = "ProB" }
+                 sortedDiagnostic.forEach { entry -> communicator.publishDiagnostics(entry.key, entry.value)}
+                 communicator.showMessage("Evaluation done: ${diagnostics.size} problem(s)", MessageType.Log)
+ 
+diff --git a/src/main/kotlin/b/language/server/Server.kt b/src/main/kotlin/b/language/server/Server.kt
+index 8711b89..7fe5bab 100644
+--- a/src/main/kotlin/b/language/server/Server.kt
++++ b/src/main/kotlin/b/language/server/Server.kt
+@@ -25,7 +25,12 @@ class Server : LanguageServer, ServerInterface {
+ 
+     override fun initialize(params: InitializeParams?): CompletableFuture<InitializeResult> {
+         val res = InitializeResult(ServerCapabilities())
+-        res.capabilities.textDocumentSync = Either.forLeft(TextDocumentSyncKind.Full)
++        // ProB checks the file on disk, so only open and save need to trigger a check.
++        val sync = TextDocumentSyncOptions()
++        sync.openClose = true
++        sync.change = TextDocumentSyncKind.None
++        sync.save = Either.forRight(SaveOptions(false))
++        res.capabilities.textDocumentSync = Either.forRight(sync)
+         res.capabilities.workspace = WorkspaceServerCapabilities(WorkspaceFoldersOptions())
+         res.capabilities.workspace.workspaceFolders.supported = true
+        // res.capabilities.completionProvider = CompletionOptions()
+@@ -90,7 +95,7 @@ class Server : LanguageServer, ServerInterface {
+             configurationItem.section = "prob"
+ 
+             val requestedConfig = languageClient.configuration(ConfigurationParams(listOf(configurationItem)))
+-            documentSettings[uri] = CompletableFuture.allOf(requestedConfig).thenApply{ castJsonToSetting(requestedConfig.get().first() as JsonObject) }
++            documentSettings[uri] = CompletableFuture.allOf(requestedConfig).thenApply{ castJsonToSetting(requestedConfig.get().firstOrNull() as? JsonObject ?: JsonObject()) }
+             documentSettings[uri]!!
+         }
+     }
+diff --git a/src/main/kotlin/b/language/server/Util.kt b/src/main/kotlin/b/language/server/Util.kt
+index 3a19add..d7c6288 100644
+--- a/src/main/kotlin/b/language/server/Util.kt
++++ b/src/main/kotlin/b/language/server/Util.kt
+@@ -11,12 +11,15 @@ import com.google.gson.JsonObject
+  * @return the settings object
+  */
+ fun castJsonToSetting(json : JsonObject) : Settings {
++    // Missing keys fall back to the defaults instead of failing the settings future.
++    val defaults = Settings()
++    fun value(vararg keys : String) = keys.firstNotNullOfOrNull { key -> json.get(key)?.takeUnless { it.isJsonNull } }
+     return Settings(
+-            Gson().fromJson(json.get("wdChecks"), Boolean::class.java),
+-            Gson().fromJson(json.get("strictChecks"), Boolean::class.java),
+-            Gson().fromJson(json.get("performanceHints"), Boolean::class.java),
+-            Gson().fromJson(json.get("proBHome"), String::class.java),
+-            Gson().fromJson(json.get("debugMode"), Boolean::class.java))
++            strictChecks = value("strictChecks")?.asBoolean ?: defaults.strictChecks,
++            wdChecks = value("wdChecks")?.asBoolean ?: defaults.wdChecks,
++            performanceHints = value("performanceHints")?.asBoolean ?: defaults.performanceHints,
++            probHome = value("probHome", "proBHome")?.asString ?: defaults.probHome,
++            debugMode = value("debugMode")?.asBoolean ?: defaults.debugMode)
+ }
+ 
+ 
+diff --git a/src/main/kotlin/b/language/server/communication/Communicator.kt b/src/main/kotlin/b/language/server/communication/Communicator.kt
+index 5374c64..75ec17e 100644
+--- a/src/main/kotlin/b/language/server/communication/Communicator.kt
++++ b/src/main/kotlin/b/language/server/communication/Communicator.kt
+@@ -24,7 +24,9 @@ object Communicator : CommunicatorInterface {
+      * @param diagnostics object containing the Diagnostics
+      */
+     override fun publishDiagnostics(target: String, diagnostics: List<Diagnostic>) {
+-        client.publishDiagnostics(PublishDiagnosticsParams(target, diagnostics))
++        // ProB reports plain file paths, but clients expect file:// URIs.
++        val uri = if (target.contains("://")) target else java.io.File(target).toPath().toUri().toString()
++        client.publishDiagnostics(PublishDiagnosticsParams(uri, diagnostics))
+ 
+     }
+ 
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Util.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Util.kt
+index 3bf5dc5..91a9cd1 100644
+--- a/src/main/kotlin/b/language/server/proBMangement/prob/Util.kt
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Util.kt
+@@ -17,7 +17,8 @@ fun convertErrorItems(errorItems: List<ErrorItem>, currentLoadedFile: File, comm
+                     errorItem.message,
+                     getErrorItemType(errorItem.type),
+ 
+-                File(location.filename).toURI().path)
++                // Locations without a file name belong to the checked file.
++                File(location.filename.ifEmpty { currentLoadedFile.absolutePath }).toURI().path)
+ 
+         }.ifEmpty { //Fallback when errors from prob do not have position infos
+             listOf(Diagnostic(Range(
