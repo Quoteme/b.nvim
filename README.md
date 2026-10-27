@@ -1,6 +1,10 @@
 # prob.vim
 
-![ProB Logo](https://www3.hhu.de/stups/prob/skins/prob/img/prob_logo.png)
+<p>
+  <a href="https://prob.hhu.de/"><img src="https://prob.hhu.de/w/skins/prob/resources/img/prob_logo.svg" alt="ProB" height="64"></a>
+  &nbsp;
+  <a href="https://wiki.event-b.org/"><img src="https://wiki.event-b.org/images/Wiki.png" alt="Event-B" height="64"></a>
+</p>
 
 Vim and Neovim plugin for classical B machines (`.mch`, `.ref`, `.imp`,
 `.rmch`, B `.def` files) and Event-B, using the
