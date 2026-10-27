@@ -4,7 +4,7 @@ function M.check()
   local prob = require('prob')
   local health = vim.health
 
-  health.start('prob.vim')
+  health.start('b.nvim')
 
   if vim.fn.has('nvim-0.11') == 1 then
     health.ok('Neovim ' .. tostring(vim.version()))
@@ -18,7 +18,7 @@ function M.check()
   else
     health.warn(
       ('Language server `%s` not found, using the probcli quickfix checker instead'):format(cmd),
-      { 'Install b-language-server, e.g. `nix profile install github:Quoteme/prob.vim#b-language-server`' }
+      { 'Put b-language-server on PATH, e.g. github:Quoteme/b.nvim#b-language-server (see the README)' }
     )
   end
 
@@ -33,7 +33,7 @@ function M.check()
       health.ok(('Tree-sitter parser `%s` found'):format(lang))
     else
       health.warn(('Tree-sitter parser `%s` not found, no tree-sitter highlighting for it'):format(lang), {
-        ('Build it from the tree-sitter-%s directory of this plugin, or use the `prob-nvim` Nix package'):format(lang),
+        ('Build it from the tree-sitter-%s directory of this plugin, or use the `b-nvim` Nix package'):format(lang),
       })
     end
   end

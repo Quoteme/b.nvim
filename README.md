@@ -1,4 +1,4 @@
-# prob.vim
+# b.nvim
 
 <p>
   <a href="https://prob.hhu.de/"><img src="https://prob.hhu.de/w/skins/prob/resources/img/prob_logo.svg" alt="ProB" height="64"></a>
@@ -10,26 +10,41 @@
   <a href="https://www.vim.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/9/9f/Vimlogo.svg" alt="Vim" height="64"></a>
 </p>
 
-Vim and Neovim plugin for classical B machines (`.mch`, `.ref`, `.imp`,
-`.rmch`, B `.def` files) and Event-B, using the
-[ProB](http://stups.hhu.de/ProB) animator and model checker.
+Neovim plugin (with basic Vim support) for the B method, using the
+[ProB](https://prob.hhu.de/) animator and model checker.
 
-- **Neovim (0.11+):** errors, warnings and well-definedness problems as LSP
-  diagnostics from the [B language
-  server](https://github.com/hhu-stups/b-language-server), plus syntax
-  highlighting, folding and indentation through tree-sitter grammars for B and
-  Event-B.
+- **Neovim (0.11+):** errors, warnings and proof obligations as LSP diagnostics
+  from the [B language server](https://github.com/hhu-stups/b-language-server),
+  code actions for model checking, Rodin's keyboard for Event-B, and syntax
+  highlighting, folding and indentation through tree-sitter grammars.
 - **Vim:** parse and type errors of classical B in the quickfix list, from
   `probcli`.
+
+## Supported languages
+
+| Language | Files | Neovim | Vim |
+| --- | --- | --- | --- |
+| Classical B as read by ProB: the B-Book language, including Atelier B's syntax and ProB's extensions | `.mch`, `.ref`, `.imp` | ProB's parse, type and well-definedness errors; model checking; highlighting | ProB's errors |
+| ProB rules machines | `.rmch` | as above | ProB's errors |
+| B definition files | `.def` | highlighting; errors through the machines that include them | – |
+| Event-B in [Camille notation](https://wiki.event-b.org/index.php/TextEditor_EBNF) | `.mch` | Rodin's static checks and proof obligations, ProB discharging and model checking, Rodin's keyboard, highlighting | – |
+
+Not supported:
+
+- **Atelier B's tools:** its provers, project files and B0 code generation.
+  Atelier B models are checked by ProB, not by Atelier B.
+- **Rodin project files** (`.bum`, `.buc`): write the components in Camille
+  notation instead.
+- **ProB's other input languages:** TLA+, Z, CSP-M, Alloy, XTL.
 
 ## Requirements
 
 | Dependency | Needed for | Nix package |
 | --- | --- | --- |
 | Neovim 0.11+ | LSP and tree-sitter support | |
-| `b-language-server` | Neovim diagnostics | `prob-vim.packages.<system>.b-language-server` |
+| `b-language-server` | Neovim diagnostics | `b-nvim.packages.<system>.b-language-server` |
 | Java 17+ | the language server and ProB's B parser | included in `b-language-server` |
-| [`probcli`](https://prob.hhu.de/w/index.php/Download) | Vim, and Neovim without the language server | `prob-vim.packages.<system>.prob` |
+| [`probcli`](https://prob.hhu.de/w/index.php/Download) | Vim, and Neovim without the language server | `b-nvim.packages.<system>.prob` |
 | tree-sitter CLI and a C compiler | building the parser outside Nix | |
 
 Without `b-language-server`, Neovim falls back to the `probcli` quickfix
@@ -44,19 +59,19 @@ server patched for Neovim. The server package brings its own Java and ProB.
 
 ```nix
 # flake.nix
-inputs.prob-vim.url = "github:Quoteme/prob.vim";
+inputs.b-nvim.url = "github:Quoteme/b.nvim";
 
 # home-manager module
 { inputs, pkgs, ... }:
 let
-  prob-vim = inputs.prob-vim.packages.${pkgs.stdenv.hostPlatform.system};
+  b-nvim = inputs.b-nvim.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
   programs.neovim = {
     enable = true;
-    plugins = [ prob-vim.prob-nvim ];
+    plugins = [ b-nvim.b-nvim ];
     # Only on Neovim's PATH, not in your profile.
-    extraPackages = [ prob-vim.b-language-server ];
+    extraPackages = [ b-nvim.b-language-server ];
   };
 }
 ```
@@ -67,8 +82,8 @@ Without home-manager, the flake can still provide every external
 requirement for one shell session, e.g. alongside lazy.nvim below:
 
 ```sh
-nix shell github:Quoteme/prob.vim#b-language-server \
-          github:Quoteme/prob.vim#prob \
+nix shell github:Quoteme/b.nvim#b-language-server \
+          github:Quoteme/b.nvim#prob \
           nixpkgs#tree-sitter nixpkgs#gcc
 nvim model.mch
 ```
@@ -80,17 +95,17 @@ project, add them to the project's own `flake.nix` and enter it with
 
 ```nix
 {
-  inputs.prob-vim.url = "github:Quoteme/prob.vim";
-  inputs.nixpkgs.follows = "prob-vim/nixpkgs";
+  inputs.b-nvim.url = "github:Quoteme/b.nvim";
+  inputs.nixpkgs.follows = "b-nvim/nixpkgs";
 
-  outputs = { nixpkgs, prob-vim, ... }:
+  outputs = { nixpkgs, b-nvim, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
     in
     {
       devShells.${system}.default = pkgs.mkShell {
-        packages = with prob-vim.packages.${system}; [ b-language-server prob ];
+        packages = with b-nvim.packages.${system}; [ b-language-server prob ];
       };
     };
 }
@@ -100,7 +115,7 @@ project, add them to the project's own `flake.nix` and enter it with
 
 ```lua
 {
-  'Quoteme/prob.vim',
+  'Quoteme/b.nvim',
   -- needs the tree-sitter CLI and a C compiler
   build = 'mkdir -p parser && tree-sitter build -o parser/b.so tree-sitter-b && tree-sitter build -o parser/eventb.so tree-sitter-eventb',
   config = function()
@@ -121,8 +136,8 @@ The language server needs the patches in `nix/b-language-server/`:
 git clone https://github.com/hhu-stups/b-language-server
 cd b-language-server
 git checkout 16595180e7e02666d0544d6b554715637c3a7ca4
-git apply /path/to/prob.vim/nix/b-language-server/client-compat.patch
-git apply /path/to/prob.vim/nix/b-language-server/eventb-camille.patch
+git apply /path/to/b.nvim/nix/b-language-server/client-compat.patch
+git apply /path/to/b.nvim/nix/b-language-server/eventb-camille.patch
 ./gradlew shadowJar
 ```
 
@@ -138,7 +153,7 @@ end,
 
 ### Vim
 
-Use your plugin manager, e.g. `Plugin 'Quoteme/prob.vim'` (Vundle), or clone
+Use your plugin manager, e.g. `Plugin 'Quoteme/b.nvim'` (Vundle), or clone
 the repository into `~/.vim/pack/plugins/start/`. Vim only needs `probcli`.
 
 ## Usage

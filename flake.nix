@@ -1,5 +1,5 @@
 {
-  description = "prob.vim: ProB diagnostics and B syntax highlighting for Vim and Neovim";
+  description = "b.nvim: the B method and Event-B in Neovim, using ProB";
 
   inputs = {
     probcli.url = "github:Quoteme/probcli";
@@ -37,8 +37,8 @@
       # Runtime directory holding the compiled parsers where Neovim looks for them.
       parser-rtp = pkgs.runCommand "tree-sitter-prob-rtp" { } linkParsers;
 
-      prob-nvim = pkgs.vimUtils.buildVimPlugin {
-        pname = "prob.vim";
+      b-nvim = pkgs.vimUtils.buildVimPlugin {
+        pname = "b.nvim";
         version = "0-unstable";
         src = lib.fileset.toSource {
           root = ./.;
@@ -55,7 +55,7 @@
         postInstall = linkParsers;
       };
 
-      # Start an editor with only this checkout of prob.vim on the runtimepath.
+      # Start an editor with only this checkout of b.nvim on the runtimepath.
       mkEditor =
         name: editor: plugin:
         pkgs.writeShellScriptBin name ''
@@ -102,9 +102,9 @@
           b-language-server
           tree-sitter-b
           tree-sitter-eventb
-          prob-nvim
+          b-nvim
           ;
-        default = prob-nvim;
+        default = b-nvim;
       };
 
       checks.${system} =
