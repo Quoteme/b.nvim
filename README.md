@@ -4,6 +4,10 @@
   <a href="https://prob.hhu.de/"><img src="https://prob.hhu.de/w/skins/prob/resources/img/prob_logo.svg" alt="ProB" height="64"></a>
   &nbsp;
   <a href="https://wiki.event-b.org/"><img src="https://wiki.event-b.org/images/Wiki.png" alt="Event-B" height="64"></a>
+  &nbsp;
+  <a href="https://neovim.io/"><img src="https://neovim.io/logos/neovim-mark.svg" alt="Neovim" height="64"></a>
+  &nbsp;
+  <a href="https://www.vim.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/9/9f/Vimlogo.svg" alt="Vim" height="64"></a>
 </p>
 
 Vim and Neovim plugin for classical B machines (`.mch`, `.ref`, `.imp`,
