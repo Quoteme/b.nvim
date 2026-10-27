@@ -58,7 +58,9 @@ in
   'Quoteme/prob.vim',
   -- needs the tree-sitter CLI and a C compiler
   build = 'mkdir -p parser && tree-sitter build -o parser/b.so tree-sitter-b',
-  opts = {},
+  config = function()
+    require('prob').setup()
+  end,
 }
 ```
 
@@ -81,9 +83,11 @@ git apply /path/to/prob.vim/nix/b-language-server/client-compat.patch
 and point the plugin at the jar ending in `-all.jar` in `build/libs/`:
 
 ```lua
-opts = {
-  lsp = { cmd = { 'java', '-jar', '/path/to/b-language-server/build/libs/<name>-all.jar', '--stdio' } },
-},
+config = function()
+  require('prob').setup({
+    lsp = { cmd = { 'java', '-jar', '/path/to/b-language-server/build/libs/<name>-all.jar', '--stdio' } },
+  })
+end,
 ```
 
 ### Vim

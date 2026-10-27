@@ -81,7 +81,12 @@ end
 
 ---@param opts? prob.Config
 function M.setup(opts)
-  M.config = vim.tbl_deep_extend('force', M.config, opts or {})
+  opts = opts or {}
+  M.config = vim.tbl_deep_extend('force', M.config, opts)
+  -- Lists merge by index, so a shorter command would keep default arguments.
+  if opts.lsp and opts.lsp.cmd then
+    M.config.lsp.cmd = opts.lsp.cmd
+  end
   M.enable()
 end
 
