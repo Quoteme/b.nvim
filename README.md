@@ -20,6 +20,21 @@ Neovim plugin (with basic Vim support) for the B method, using the
 - **Vim:** parse and type errors of classical B in the quickfix list, from
   `probcli`.
 
+## Demo Videos
+
+https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d
+> (Figure 1) Example of using LSP hover and diagnostics
+
+https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac
+> (Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <key>&lt;localleader&gt;</key><key>s</key>)
+
+https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e
+> (Figure 3) Running a simple Event B animation
+
+https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09
+> (Figure 4) Running a more complex Event B animation
+
+
 ## Supported languages
 
 | Language | Files | Neovim | Vim |
