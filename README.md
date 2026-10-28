@@ -1,8 +1,7 @@
 # b.nvim
 
 > [!CAUTION]
-> **This project was vibe coded!** It works and is tested, but take it with a
-> heavy grain of salt.
+> **Some parts of this project were vibe coded!** Proceed with caution!
 
 <p>
   <a href="https://prob.hhu.de/"><img src="https://prob.hhu.de/w/skins/prob/resources/img/prob_logo.svg" alt="ProB" height="64"></a>
