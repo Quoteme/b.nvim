@@ -387,6 +387,24 @@ In B and Event-B buffers the plugin maps these keys under `<localleader>`
 
 Change or disable them with the `keys` option below.
 
+### Try it
+
+[`examples/Lift.mch`](examples/Lift.mch) is a complete Event-B machine in a
+single file: a lift with a door, requested floors and a safety invariant.
+
+```sh
+nvim examples/Lift.mch
+```
+
+- Hover (`K`) over `⇒`, `∉`, `requests` or `@safe` for the documentation, the
+  types and the proof obligations.
+- Type `x : NAT` inside a formula: it becomes `x ∈ ℕ`.
+- Press `<localleader>a` to animate it: execute `INITIALISATION`, then
+  `call f = 2`, `move f = 2`, `open` and `close` with `⏎`, and watch `floor`,
+  `door` and `requests` change. `m` model checks it.
+- Change `@safe` to `door = TRUE ⇒ floor ∈ requests` and save: ProB shows the
+  proof obligations this breaks, with counterexamples.
+
 ## Configuration
 
 Neovim, all optional:

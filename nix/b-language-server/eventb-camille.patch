@@ -12,7 +12,7 @@ index 3a000bc..db819b4 100644
  
  java {
 diff --git a/src/main/kotlin/b/language/server/BDocumentService.kt b/src/main/kotlin/b/language/server/BDocumentService.kt
-index e4d9da2..657cce9 100644
+index e4d9da2..1dffa1f 100644
 --- a/src/main/kotlin/b/language/server/BDocumentService.kt
 +++ b/src/main/kotlin/b/language/server/BDocumentService.kt
 @@ -2,7 +2,14 @@ package b.language.server
@@ -30,7 +30,7 @@ index e4d9da2..657cce9 100644
  import org.eclipse.lsp4j.*
  import org.eclipse.lsp4j.services.TextDocumentService
  import java.io.File
-@@ -15,6 +22,20 @@ class BDocumentService(private val server: ServerInterface,
+@@ -15,6 +22,18 @@ class BDocumentService(private val server: ServerInterface,
  
      private val documents = ConcurrentHashMap<String, String>()
      private val issueTracker : ConcurrentHashMap<String, Set<String>> = ConcurrentHashMap()
@@ -44,14 +44,12 @@ index e4d9da2..657cce9 100644
 +        const val ANIMATE = "prob.animate"
 +        /** Handled by the client, which opens its animation panel and then sends [ANIMATE]. */
 +        const val OPEN_ANIMATION = "prob.animate.open"
-+        /** Shows a visualisation of the animation's current state, as ProB Tcl/Tk does. */
-+        const val VISUALIZE = "prob.visualize"
-+        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS, ANIMATE, VISUALIZE)
++        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS, ANIMATE)
 +    }
  
      /**
       * The document open notification is sent from the client to the server to
-@@ -45,32 +66,22 @@ class BDocumentService(private val server: ServerInterface,
+@@ -45,32 +64,22 @@ class BDocumentService(private val server: ServerInterface,
      /**
       * checks a document via prob and the set options
       * @param file the uri to perform actions on
@@ -90,7 +88,7 @@ index e4d9da2..657cce9 100644
              }catch (e : CouldNotFindProBHomeException){
  
                  communicator.sendDebugMessage(e.localizedMessage, MessageType.Info)
-@@ -80,6 +91,101 @@ class BDocumentService(private val server: ServerInterface,
+@@ -80,6 +89,91 @@ class BDocumentService(private val server: ServerInterface,
  
      }
  
@@ -147,16 +145,6 @@ index e4d9da2..657cce9 100644
 +                }
 +            }
 +        }
-+        if (command == VISUALIZE) {
-+            val request = argument as? JsonObject ?: return CompletableFuture.completedFuture(null)
-+            fun field(name : String) = request.get(name)?.takeUnless { it.isJsonNull }
-+            val formulas = field("formulas")?.asJsonArray?.map { it.asString }.orEmpty()
-+            return CompletableFuture.supplyAsync {
-+                synchronized(animation) {
-+                    animation.visualize(field("kind")?.asString ?: "dot", field("command")?.asString ?: "", formulas, field("format")?.asString ?: "svg")
-+                }
-+            }
-+        }
 +        val uri = (argument as? JsonPrimitive)?.asString ?: argument?.toString()?.trim('"')
 +            ?: return CompletableFuture.completedFuture(null)
 +        val file = File(URI(uri).path)
@@ -192,7 +180,7 @@ index e4d9da2..657cce9 100644
  
      /**
       * Gets all uris that are no longer contain problems
-@@ -112,8 +218,8 @@ class BDocumentService(private val server: ServerInterface,
+@@ -112,8 +206,8 @@ class BDocumentService(private val server: ServerInterface,
       */
      override fun didChange(params: DidChangeTextDocumentParams?) {
  
@@ -320,10 +308,10 @@ index 43c4789..657ba51 100644
 +}
 diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
 new file mode 100644
-index 0000000..6f40613
+index 0000000..2ba0deb
 --- /dev/null
 +++ b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
-@@ -0,0 +1,489 @@
+@@ -0,0 +1,324 @@
 +package b.language.server.proBMangement.prob
 +
 +import b.language.server.communication.CommunicatorInterface
@@ -332,17 +320,9 @@ index 0000000..6f40613
 +import com.google.inject.Stage
 +import de.prob.animator.ReusableAnimator
 +import de.prob.animator.command.FindStateCommand
-+import de.prob.animator.command.GetAnimationMatrixForStateCommand
-+import de.prob.animator.command.ExportVisBHtmlForStates
-+import de.prob.animator.command.GetImagesForMachineCommand
-+import de.prob.animator.command.LoadVisBCommand
-+import de.prob.animator.command.ReadVisBPathFromDefinitionsCommand
 +import de.prob.animator.domainobjects.AbstractEvalResult
-+import de.prob.animator.domainobjects.AnimationMatrixEntry
-+import de.prob.animator.domainobjects.DotVisualizationCommand
 +import de.prob.animator.domainobjects.EvalResult
 +import de.prob.animator.domainobjects.FormulaExpand
-+import de.prob.animator.domainobjects.TableVisualizationCommand
 +import de.prob.check.ConsistencyChecker
 +import de.prob.check.ModelCheckErrorUncovered
 +import de.prob.check.ModelCheckingOptions
@@ -354,7 +334,6 @@ index 0000000..6f40613
 +import de.prob.statespace.Trace
 +import de.prob.statespace.Transition
 +import java.io.File
-+import java.nio.file.Files
 +import java.time.Duration
 +
 +/**
@@ -375,15 +354,6 @@ index 0000000..6f40613
 +    private var project : CamilleProject? = null
 +    private var trace : Trace? = null
 +    private var message = ""
-+    /** The images of ANIMATION_IMGn, by number. */
-+    private var images : Map<Int, File> = emptyMap()
-+    /** The page showing the graphical animation, once opened; it is rewritten after every step. */
-+    private var graphicsPage : File? = null
-+    /** The VisB visualisation named by VISB_JSON_FILE, once loaded. */
-+    private var visb : File? = null
-+    /** The page showing the VisB visualisation, once opened; it is rewritten after every step. */
-+    private var visbPage : File? = null
-+    private val output : File by lazy { Files.createTempDirectory("prob-visualization").toFile().apply { deleteOnExit() } }
 +
 +    /** Loads [file] and starts a new animation of it. */
 +    fun start(file : File) : Map<String, Any?> {
@@ -412,14 +382,6 @@ index 0000000..6f40613
 +            return failure(e.errors.firstOrNull()?.message ?: e.message ?: "ProB could not load the model")
 +        }
 +        trace = Trace(stateSpace)
-+        images = try {
-+            GetImagesForMachineCommand().also { stateSpace.execute(it) }.images.mapValues { (_, name) ->
-+                File(name).let { if (it.isAbsolute) it else File(file.absoluteFile.parentFile, name) }
-+            }
-+        } catch (e : ProBError) {
-+            emptyMap()
-+        }
-+        visb = loadVisB(stateSpace, file)
 +        return view()
 +    }
 +
@@ -427,9 +389,6 @@ index 0000000..6f40613
 +        trace?.stateSpace?.kill()
 +        trace = null
 +        project = null
-+        graphicsPage = null
-+        visb = null
-+        visbPage = null
 +    }
 +
 +    /** Runs one action of the animation and returns the new view. */
@@ -490,137 +449,6 @@ index 0000000..6f40613
 +    private fun failure(text : String) = mapOf("error" to text)
 +
 +    // ----------------------------------------------------------------------
-+    // Visualisations of ProB Tcl/Tk
-+
-+    /**
-+     * Shows the current state: [kind] "graphics" writes the graphical animation as a page that
-+     * follows the animation, "dot" renders the dot visualisation [command] as [format], and
-+     * "table" returns the table visualisation [command]. [formulas] are its arguments.
-+     */
-+    fun visualize(kind : String, command : String, formulas : List<String>, format : String) : Map<String, Any?> {
-+        val trace = trace ?: return failure("No animation is running")
-+        return try {
-+            when (kind) {
-+                "graphics" -> {
-+                    val page = File(output, "graphics.html")
-+                    graphicsPage = page
-+                    writeGraphics(trace)
-+                    mapOf("path" to page.path)
-+                }
-+                "visb" -> {
-+                    if (visb == null) return failure("The machine has no VISB_JSON_FILE in its DEFINITIONS")
-+                    visbPage = File(output, "visb.html")
-+                    writeVisB(trace)
-+                    mapOf("path" to visbPage!!.path)
-+                }
-+                "dot" -> {
-+                    val visualization = DotVisualizationCommand.getByName(command, trace)
-+                    val target = File(output, "$command.${format.ifBlank { "svg" }}")
-+                    target.writeBytes(visualization.visualizeToBytes(format.ifBlank { "svg" }, parse(trace, formulas)))
-+                    mapOf("path" to target.path)
-+                }
-+                "table" -> {
-+                    val visualization = TableVisualizationCommand.getByName(command, trace)
-+                    val table = visualization.visualize(parse(trace, formulas))
-+                    mapOf("title" to visualization.name, "header" to table.header, "rows" to table.rows)
-+                }
-+                else -> failure("Unknown visualisation $kind")
-+            }
-+        } catch (e : ProBError) {
-+            failure(e.errors.firstOrNull()?.message ?: e.message ?: "ProB could not visualise the state")
-+        } catch (e : Exception) {
-+            failure(e.message ?: e.toString())
-+        }
-+    }
-+
-+    private fun parse(trace : Trace, formulas : List<String>) =
-+        formulas.map { trace.stateSpace.model.parseFormula(it, FormulaExpand.EXPAND) }
-+
-+    /** The dot and table visualisations of ProB Tcl/Tk's Visualize menu for the current state. */
-+    private fun visualizations(trace : Trace) : List<Map<String, Any?>> = try {
-+        fun entry(kind : String, it : de.prob.animator.domainobjects.DynamicCommandItem) = mapOf(
-+            "kind" to kind, "command" to it.command, "name" to it.name, "description" to it.description,
-+            "arity" to it.arity, "available" to it.isAvailable, "reason" to it.available,
-+        )
-+        DotVisualizationCommand.getAll(trace).map { entry("dot", it) } + TableVisualizationCommand.getAll(trace).map { entry("table", it) }
-+    } catch (e : ProBError) {
-+        emptyList()
-+    }
-+
-+    /**
-+     * The grid of ANIMATION_FUNCTION in [state], as ProB Tcl/Tk draws it: each cell has a text,
-+     * which for an image is ANIMATION_STR's or the image's name, and the image file if any.
-+     */
-+    private fun graphics(state : State) : List<List<Map<String, Any?>>>? {
-+        val matrix = try {
-+            GetAnimationMatrixForStateCommand(state).also { state.stateSpace.execute(it) }.matrix
-+        } catch (e : ProBError) {
-+            return null
-+        } catch (e : IllegalArgumentException) {
-+            return null
-+        }
-+        if (matrix.isNullOrEmpty()) return null
-+        return matrix.map { row ->
-+            row.map { entry ->
-+                when (entry) {
-+                    is AnimationMatrixEntry.Image -> images[entry.imageNumber].let { image ->
-+                        mapOf("text" to (image?.nameWithoutExtension ?: "#${entry.imageNumber}"), "image" to image?.path)
-+                    }
-+                    is AnimationMatrixEntry.Text -> mapOf("text" to entry.text)
-+                    else -> mapOf("text" to "")
-+                }
-+            }
-+        }
-+    }
-+
-+    /** Loads the VisB file that VISB_JSON_FILE names, relative to the model, as ProB Tcl/Tk does. */
-+    private fun loadVisB(stateSpace : StateSpace, file : File) : File? = try {
-+        val path = ReadVisBPathFromDefinitionsCommand().also { stateSpace.execute(it) }.path
-+        path?.takeIf { it.isNotBlank() }?.let { File(it).let { f -> if (f.isAbsolute) f else File(file.absoluteFile.parentFile, it) } }
-+            ?.also { stateSpace.execute(LoadVisBCommand(it.absolutePath)) }
-+    } catch (e : ProBError) {
-+        message = "VisB: " + (e.errors.firstOrNull()?.message ?: e.message)
-+        null
-+    }
-+
-+    /** Writes the VisB visualisation of the current state to [visbPage], made to reload itself. */
-+    private fun writeVisB(trace : Trace) {
-+        val page = visbPage ?: return
-+        if (!trace.currentState.isInitialised) return
-+        try {
-+            trace.stateSpace.execute(ExportVisBHtmlForStates(trace.currentState, page.toPath()))
-+            page.writeText(page.readText().replaceFirst(Regex("(?i)<head>"), "<head><meta http-equiv=\"refresh\" content=\"1\">"))
-+        } catch (e : ProBError) {
-+            message = "VisB: " + (e.errors.firstOrNull()?.message ?: e.message)
-+        }
-+    }
-+
-+    /** Writes the graphical animation of the current state to [graphicsPage], which reloads itself. */
-+    private fun writeGraphics(trace : Trace) {
-+        val page = graphicsPage ?: return
-+        fun escape(text : String) = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-+        val rows = graphics(trace.currentState)
-+        val body = if (rows == null) "<p>No graphical animation for this state: the machine needs ANIMATION_FUNCTION in its DEFINITIONS.</p>"
-+        else rows.joinToString("\n", "<table>\n", "\n</table>") { row ->
-+            row.joinToString("", "<tr>", "</tr>") { cell ->
-+                val image = cell["image"] as String?
-+                if (image != null && File(image).exists()) "<td><img src=\"${escape(File(image).toURI().toString())}\" alt=\"${escape(cell["text"] as String)}\"></td>"
-+                else "<td>${escape(cell["text"] as String)}</td>"
-+            }
-+        }
-+        val name = file?.nameWithoutExtension ?: ""
-+        page.writeText("""<!DOCTYPE html>
-+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="1">
-+<title>ProB · ${escape(name)}</title>
-+<style>body{font-family:sans-serif}table{border-collapse:collapse}td{padding:0;text-align:center;font-family:monospace}img{display:block}</style>
-+</head><body>
-+<p>ProB · ${escape(name)} · step ${trace.currentElements.size - 1}</p>
-+$body
-+</body></html>
-+""")
-+    }
-+
-+    // ----------------------------------------------------------------------
 +    // The view sent to the client
 +
 +    private fun view() : Map<String, Any?> {
@@ -668,8 +496,6 @@ index 0000000..6f40613
 +            else labelled.map { (label, formula, at) -> mapOf("label" to label, "ok" to holds(state, formula)) + location(at) }
 +        }
 +
-+        writeGraphics(trace)
-+        writeVisB(trace)
 +        return mapOf(
 +            "machine" to sources.name,
 +            "file" to file!!.toPath().toUri().toString(),
@@ -689,9 +515,6 @@ index 0000000..6f40613
 +            "context" to sources.isContext,
 +            "errors" to state.stateErrors.map { "${it.event}: ${it.shortDescription}" },
 +            "message" to message,
-+            "graphics" to (if (state.isInitialised) graphics(state) else null),
-+            "visualizations" to visualizations(trace),
-+            "visb" to (visb != null),
 +        )
 +    }
 +
@@ -2487,16 +2310,18 @@ index d77bd03..9fd9c3d 100644
 \ No newline at end of file
 diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt
 new file mode 100644
-index 0000000..f58285b
+index 0000000..d30f0fa
 --- /dev/null
 +++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,229 @@
 +package b.language.server.proBMangement.prob
 +
 +import de.be4.eventb.core.parser.node.Token
 +import org.eventb.core.ast.Expression
 +import org.eventb.core.ast.Formula
++import org.eventb.core.ast.ITypeEnvironment
 +import org.eventb.core.ast.IntegerType
++import org.eventb.core.ast.Type
 +import java.io.File
 +
 +/**
@@ -2529,6 +2354,12 @@ index 0000000..f58285b
 +
 +    private val obligations = mutableListOf<ProofObligation>()
 +
++    /**
++     * The types of the identifiers in scope. Like Rodin, every obligation carries them as typing
++     * hypotheses, since ProB cannot always infer them from the predicates alone, as in x' = ∅.
++     */
++    private var types : Map<String, Type> = emptyMap()
++
 +    fun generate(info: Any?): List<ProofObligation> {
 +        when (info) {
 +            is ContextInfo -> context(info)
@@ -2538,11 +2369,29 @@ index 0000000..f58285b
 +    }
 +
 +    private fun po(name: String, file: File, token: Token, hypotheses: List<String>, goal: String) {
-+        obligations += ProofObligation(name, file, token.line, token.pos, token.text.length, hypotheses, goal)
++        val text = (hypotheses + goal).joinToString(" ")
++        val typing = types.filter { (identifier, _) ->
++            Regex("(?<![\\w'])${Regex.escape(identifier)}(?![\\w'])").containsMatchIn(text)
++        }.map { (identifier, type) -> "$identifier ∈ ${type.toExpression()}" }
++        obligations += ProofObligation(name, file, token.line, token.pos, token.text.length, typing + hypotheses, goal)
++    }
++
++    /** The types of [env]'s identifiers and of their after-values, without the carrier sets. */
++    private fun typesOf(env : ITypeEnvironment) : Map<String, Type> {
++        val result = LinkedHashMap<String, Type>()
++        val iterator = env.iterator
++        while (iterator.hasNext()) {
++            iterator.advance()
++            if (iterator.isGivenSet) continue
++            result[iterator.name] = iterator.type
++            result[iterator.name + PRIME_SUFFIX] = iterator.type
++        }
++        return result
 +    }
 +
 +    private fun context(info: ContextInfo) {
 +        val file = info.component.file
++        types = typesOf(info.env)
 +        val hypotheses = info.extended.flatMap { it.closure() }.distinct().flatMap { c -> c.axioms.map { prob(it.formula) } }.toMutableList()
 +        for (axiom in info.axioms) {
 +            wd(axiom.formula)?.let { po("${axiom.label}/WD", file, axiom.token, hypotheses, it) }
@@ -2553,6 +2402,7 @@ index 0000000..f58285b
 +
 +    private fun machine(info: MachineInfo) {
 +        val file = info.component.file
++        types = typesOf(info.env)
 +        val axioms = info.contexts.flatMap { c -> c.axioms.map { prob(it.formula) } }
 +        val abstractInvariants = info.abstractInvariants.map { prob(it) }
 +        val invariants = info.invariants.map { prob(it.formula) }
@@ -2577,6 +2427,7 @@ index 0000000..f58285b
 +
 +    private fun event(info: MachineInfo, event: EventInfo, axioms: List<String>, base: List<String>) {
 +        val file = info.component.file
++        types = typesOf(info.env) + event.parameters + event.refines.flatMap { it.parameters.entries }.associate { it.key to it.value }
 +        val prefix = event.name
 +        val state = if (event.isInitialisation) axioms else base
 +
