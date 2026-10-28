@@ -22,18 +22,29 @@ Neovim plugin (with basic Vim support) for the B method, using the
 
 ## Demo Videos
 
-https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d
-> (Figure 1) Example of using LSP hover and diagnostics
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d" width="640" controls></video>
+  <br>
+  <em>(Figure 1) Example of using LSP hover and diagnostics</em>
+</p>
 
-https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac
-> (Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <key>&lt;localleader&gt;</key><key>s</key>)
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac" width="640" controls></video>
+  <br>
+  <em>(Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <kbd>&lt;localleader&gt;</kbd><kbd>s</kbd>)</em>
+</p>
 
-https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e
-> (Figure 3) Running a simple Event B animation
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e" width="640" controls></video>
+  <br>
+  <em>(Figure 3) Running a simple Event B animation</em>
+</p>
 
-https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09
-> (Figure 4) Running a more complex Event B animation
-
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09" width="640" controls></video>
+  <br>
+  <em>(Figure 4) Running a more complex Event B animation</em>
+</p>
 
 ## Supported languages
 
@@ -68,7 +79,57 @@ checker. `:checkhealth prob` shows which dependencies were found.
 
 ## Installation
 
-### Neovim with Nix (home-manager)
+1. Add a `flake.nix` to your B project. It provides the language server (with
+   its own Java and Graphviz) and `probcli`:
+
+   ```nix
+   {
+     inputs.b-nvim.url = "github:Quoteme/b.nvim";
+     inputs.nixpkgs.follows = "b-nvim/nixpkgs";
+
+     outputs =
+       { nixpkgs, b-nvim, ... }:
+       let
+         system = "x86_64-linux";
+         pkgs = nixpkgs.legacyPackages.${system};
+       in
+       {
+         devShells.${system}.default = pkgs.mkShell {
+           packages = with b-nvim.packages.${system}; [
+             b-language-server
+             prob
+           ];
+         };
+       };
+   }
+   ```
+
+2. Install the plugin with [lazy.nvim](https://github.com/folke/lazy.nvim):
+
+   ```lua
+   {
+     'Quoteme/b.nvim',
+     -- builds the tree-sitter parsers; needs the tree-sitter CLI and a C compiler
+     build = 'mkdir -p parser && tree-sitter build -o parser/b.so tree-sitter-b && tree-sitter build -o parser/eventb.so tree-sitter-eventb',
+     config = function()
+       require('prob').setup()
+     end,
+   }
+   ```
+
+3. Start Neovim from the project's shell:
+
+   ```sh
+   nix develop
+   nvim model.mch
+   ```
+
+`:checkhealth prob` shows whether everything was found. After updating the
+plugin, run `nix flake update b-nvim` in the project, so that the language
+server matches it.
+
+<details>
+<summary>Home-manager</summary>
 
 The flake builds the plugin with its tree-sitter parser, and the language
 server patched for Neovim. The server package brings its own Java and ProB.
@@ -92,10 +153,13 @@ in
 }
 ```
 
-### Requirements with `nix shell`
+</details>
 
-Without home-manager, the flake can still provide every external
-requirement for one shell session, e.g. alongside lazy.nvim below:
+<details>
+<summary><code>nix shell</code> without a project flake</summary>
+
+The flake can provide every external requirement for one shell session,
+including the tree-sitter CLI and C compiler for lazy.nvim's build step:
 
 ```sh
 nix shell github:Quoteme/b.nvim#b-language-server \
@@ -104,49 +168,19 @@ nix shell github:Quoteme/b.nvim#b-language-server \
 nvim model.mch
 ```
 
-This puts `b-language-server` (with its Java), `probcli`, and the tree-sitter
-CLI and C compiler for building the parsers on `$PATH`. To keep them per
-project, add them to the project's own `flake.nix` and enter it with
-`nix develop`:
+</details>
 
-```nix
-{
-  inputs.b-nvim.url = "github:Quoteme/b.nvim";
-  inputs.nixpkgs.follows = "b-nvim/nixpkgs";
+<details>
+<summary>Without Nix</summary>
 
-  outputs = { nixpkgs, b-nvim, ... }:
-    let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-    in
-    {
-      devShells.${system}.default = pkgs.mkShell {
-        packages = with b-nvim.packages.${system}; [ b-language-server prob ];
-      };
-    };
-}
-```
-
-### Neovim with lazy.nvim
-
-```lua
-{
-  'Quoteme/b.nvim',
-  -- needs the tree-sitter CLI and a C compiler
-  build = 'mkdir -p parser && tree-sitter build -o parser/b.so tree-sitter-b && tree-sitter build -o parser/eventb.so tree-sitter-eventb',
-  config = function()
-    require('prob').setup()
-  end,
-}
-```
-
-Install Java 17+ and [ProB](https://prob.hhu.de/w/index.php/Download) with
-your system's package manager or from the download page, and put `probcli` on
-your `$PATH`.
+Install Java 17+, [Graphviz](https://graphviz.org/) and
+[ProB](https://prob.hhu.de/w/index.php/Download) with your system's package
+manager or from the download page, and put `probcli` on your `$PATH`.
 
 The language server needs the patches in `nix/b-language-server/`:
 `client-compat.patch` (stdio transport and Neovim fixes) and
-`eventb-camille.patch` (Event-B support). Without Nix, build it with Gradle:
+`eventb-camille.patch` (Event-B support, animation and hover). Build it with
+Gradle:
 
 ```sh
 git clone https://github.com/hhu-stups/b-language-server
@@ -169,10 +203,15 @@ config = function()
 end,
 ```
 
-### Vim
+</details>
+
+<details>
+<summary>Vim</summary>
 
 Use your plugin manager, e.g. `Plugin 'Quoteme/b.nvim'` (Vundle), or clone
 the repository into `~/.vim/pack/plugins/start/`. Vim only needs `probcli`.
+
+</details>
 
 ## Usage
 
