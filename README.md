@@ -1,7 +1,7 @@
 # b.nvim
 
 > [!CAUTION]
-> **Some parts of this project were vibe coded!** Proceed with caution!
+> **Parts of this project were AI generated!** Proceed with caution!
 > Specifically, tedious tasks such as scraping the official documentation for
 > the hover texts and generating the tree-sitter parsers were automated.
 
@@ -27,30 +27,30 @@ Neovim plugin (with basic Vim support) for the B method, using the
 
 ## Demo Videos
 
-https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d
+<https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d>
 
 > (Figure 1) Example of using LSP hover and diagnostics
 
-https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac
+<https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac>
 
 > (Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <kbd>&lt;localleader&gt;</kbd><kbd>s</kbd>)
 
-https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e
+<https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e>
 
 > (Figure 3) Running a simple Event B animation
 
-https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09
+<https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09>
 
 > (Figure 4) Running a more complex Event B animation
 
 ## Supported languages
 
-| Language | Files | Neovim | Vim |
-| --- | --- | --- | --- |
-| Classical B as read by ProB: the B-Book language, including Atelier B's syntax and ProB's extensions | `.mch`, `.ref`, `.imp` | ProB's parse, type and well-definedness errors; model checking; highlighting | ProB's errors |
-| ProB rules machines | `.rmch` | as above | ProB's errors |
-| B definition files | `.def` | highlighting; errors through the machines that include them | – |
-| Event-B in [Camille notation](https://wiki.event-b.org/index.php/TextEditor_EBNF) | `.mch` | Rodin's static checks and proof obligations, ProB discharging and model checking, Rodin's keyboard, highlighting | – |
+| Language                                                                                             | Files                  | Neovim                                                                                                           | Vim           |
+| ---------------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------- |
+| Classical B as read by ProB: the B-Book language, including Atelier B's syntax and ProB's extensions | `.mch`, `.ref`, `.imp` | ProB's parse, type and well-definedness errors; model checking; highlighting                                     | ProB's errors |
+| ProB rules machines                                                                                  | `.rmch`                | as above                                                                                                         | ProB's errors |
+| B definition files                                                                                   | `.def`                 | highlighting; errors through the machines that include them                                                      | –             |
+| Event-B in [Camille notation](https://wiki.event-b.org/index.php/TextEditor_EBNF)                    | `.mch`                 | Rodin's static checks and proof obligations, ProB discharging and model checking, Rodin's keyboard, highlighting | –             |
 
 Not supported:
 
@@ -62,14 +62,14 @@ Not supported:
 
 ## Requirements
 
-| Dependency | Needed for | Nix package |
-| --- | --- | --- |
-| Neovim 0.11+ | LSP and tree-sitter support | |
-| `b-language-server` | Neovim diagnostics | `b-nvim.packages.<system>.b-language-server` |
-| Java 17+ | the language server and ProB's B parser | included in `b-language-server` |
-| [`probcli`](https://prob.hhu.de/w/index.php/Download) | Vim, and Neovim without the language server | `b-nvim.packages.<system>.prob` |
-| [Graphviz](https://graphviz.org/) (`dot`) | graphs of the animated state | included in `b-language-server` |
-| tree-sitter CLI and a C compiler | building the parser outside Nix | |
+| Dependency                                            | Needed for                                  | Nix package                                  |
+| ----------------------------------------------------- | ------------------------------------------- | -------------------------------------------- |
+| Neovim 0.11+                                          | LSP and tree-sitter support                 |                                              |
+| `b-language-server`                                   | Neovim diagnostics                          | `b-nvim.packages.<system>.b-language-server` |
+| Java 17+                                              | the language server and ProB's B parser     | included in `b-language-server`              |
+| [`probcli`](https://prob.hhu.de/w/index.php/Download) | Vim, and Neovim without the language server | `b-nvim.packages.<system>.prob`              |
+| [Graphviz](https://graphviz.org/) (`dot`)             | graphs of the animated state                | included in `b-language-server`              |
+| tree-sitter CLI and a C compiler                      | building the parser outside Nix             |                                              |
 
 Without `b-language-server`, Neovim falls back to the `probcli` quickfix
 checker. `:checkhealth prob` shows which dependencies were found.
@@ -215,12 +215,12 @@ the repository into `~/.vim/pack/plugins/start/`. Vim only needs `probcli`.
 Open a B file. Problems appear as diagnostics when you open or save it (in
 Vim: in the quickfix list). Try [`examples/Lift.mch`](examples/Lift.mch).
 
-| Key | Action |
-| --- | --- |
-| `K` | hover: documentation, examples, types and proof obligations |
-| `gra` | code actions: model check, discharge or list proof obligations, animate |
-| `<localleader>a` | animate the machine (`:ProbAnimate`) |
-| `<localleader>s` | insert an Event-B symbol (`:ProbSymbol`) |
+| Key              | Action                                                                  |
+| ---------------- | ----------------------------------------------------------------------- |
+| `K`              | hover: documentation, examples, types and proof obligations             |
+| `gra`            | code actions: model check, discharge or list proof obligations, animate |
+| `<localleader>a` | animate the machine (`:ProbAnimate`)                                    |
+| `<localleader>s` | insert an Event-B symbol (`:ProbSymbol`)                                |
 
 ### Event-B
 
@@ -251,16 +251,16 @@ While you type, ASCII becomes symbols as in Rodin: `:` → `∈`, `-->` → `→
 Save the machine, press `<localleader>a`, and execute events with `⏎` in the
 panel that opens. Values changed by the last step are marked `*`.
 
-| Key | In the panel |
-| --- | --- |
-| `⏎` | execute the event, or go back to a history step |
-| `p` | execute an event with given parameters, e.g. `k = 2` |
-| `u` / `<C-r>` | step back / forward |
-| `r` | random steps (`10r` for ten) |
-| `f` | find a state satisfying a predicate |
-| `m` | model check and jump to a counterexample |
-| `v` / `I` | visualisations: graphs, tables, graphical animation, [VisB](https://prob.hhu.de/w/index.php?title=VisB) |
-| `R` / `q` / `?` | restart / quit / all keys |
+| Key             | In the panel                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `⏎`             | execute the event, or go back to a history step                                                         |
+| `p`             | execute an event with given parameters, e.g. `k = 2`                                                    |
+| `u` / `<C-r>`   | step back / forward                                                                                     |
+| `r`             | random steps (`10r` for ten)                                                                            |
+| `f`             | find a state satisfying a predicate                                                                     |
+| `m`             | model check and jump to a counterexample                                                                |
+| `v` / `I`       | visualisations: graphs, tables, graphical animation, [VisB](https://prob.hhu.de/w/index.php?title=VisB) |
+| `R` / `q` / `?` | restart / quit / all keys                                                                               |
 
 ## Configuration
 
