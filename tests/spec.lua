@@ -152,6 +152,9 @@ local function animate(spec)
     end
     check('invariants', spec.invariants, actual)
   end
+  if spec.step then
+    check('step', spec.step, view.step)
+  end
   if spec.deadlock ~= nil then
     check('deadlock', spec.deadlock, view.deadlock)
   end

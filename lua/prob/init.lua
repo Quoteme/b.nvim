@@ -25,9 +25,9 @@ M.config = {
   -- Buffer-local mappings in B and Event-B files, shown by which-key if it is
   -- installed; false disables one.
   keys = {
-    group = '<leader>b',
-    animate = '<leader>ba',
-    symbol = '<leader>bs',
+    group = '<localleader>',
+    animate = '<localleader>a',
+    symbol = '<localleader>s',
   },
 }
 

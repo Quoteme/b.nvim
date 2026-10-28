@@ -205,12 +205,8 @@ While you type, ASCII combinations become their symbols as in Rodin's editors,
 using Rodin's keyboard table: `:` becomes `∈`, `::` becomes `:∈`, `-->` `→`,
 `NAT` `ℕ`, `!x.` `∀x·`. A combination is replaced once the next character shows
 it is complete, so `<` waits to see whether `<->` follows. Comments and labels
-keep their spelling. `:ProbSymbol` (or `require('prob').pick_symbol()`) picks a
-symbol from a list and inserts it, for example:
-
-```lua
-vim.keymap.set({ 'n', 'i' }, '<C-s>', require('prob').pick_symbol, { desc = 'Event-B symbol' })
-```
+keep their spelling. `<localleader>s` or `:ProbSymbol` picks a symbol from a list
+and inserts it.
 
 Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 
@@ -222,6 +218,81 @@ Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 Rodin's interactive prover has no counterpart; list the obligations to see what
 is left. Vim highlights nothing and checks nothing for Event-B, because
 `probcli` cannot load Camille notation.
+
+### Animation
+
+ProB can animate classical B machines and Event-B machines and contexts, like
+the ProB views in Rodin: you execute events one at a time and watch the state
+change.
+
+1. Open the machine (for example `Bank.mch`) and save it: ProB animates the
+   file on disk.
+2. Start the animation with **`<localleader>a`**, `:ProbAnimate`, or the code
+   action **ProB: animate**. A panel opens on the right:
+
+   ```
+    ◆ ProB · Bank   step 3
+
+    EVENTS
+      ▶ connect_account  c = PERSONS1, a = ACCOUNTS1
+      ▶ connect_account  c = PERSONS1, a = ACCOUNTS2
+      ○ add_client
+
+    STATE
+      account_access  ∅
+      clients         {PERSONS1} *
+
+    CONSTANTS
+      maxClients  1
+
+    INVARIANTS
+      ✓ inv1 ✓ inv2 ✓ inv3
+
+    HISTORY
+       1 SETUP_CONSTANTS
+       2 INITIALISATION
+    ▸  3 add_client(PERSONS1)
+   ```
+
+3. Move the cursor onto an event marked `▶` and press **`⏎`** to execute it.
+   The first steps are `SETUP_CONSTANTS` (if the machine sees constants) and
+   `INITIALISATION`; each line is one possible choice of values. An event with
+   parameters is listed once per choice ProB found; press **`p`** to execute it
+   with your own values, for example `k = 2`.
+
+Values that the last step changed are marked with `*`. The current values also
+appear next to the declarations in the source, and `✓`/`✗` next to each
+invariant.
+
+| Key | In the panel |
+| --- | --- |
+| `⏎` | execute the event; on a history step, go back to it; elsewhere, show the source |
+| `p` | execute an event with a parameter predicate |
+| `u` / `<C-r>` | step back / forward (with a count, several steps) |
+| `r` | execute random events (`10r` for ten) |
+| `f` | find a state satisfying a predicate |
+| `m` | model check from the current state and jump to a counterexample |
+| `gd` | show the source of the item under the cursor |
+| `R` | restart, e.g. after changing the model |
+| `q` | stop the animation and close the panel |
+| `?` | show all keys |
+
+Disabled events are marked `○`, with the guards that are false for events
+without parameters. `⚠ deadlock` means no event is enabled.
+
+### Key mappings
+
+In B and Event-B buffers the plugin maps these keys under `<localleader>`
+(`\` unless you set `maplocalleader`), which
+[which-key](https://github.com/folke/which-key.nvim) shows under the group
+**B method**:
+
+| Key | Action |
+| --- | --- |
+| `<localleader>a` | animate the machine (`:ProbAnimate`) |
+| `<localleader>s` | insert an Event-B symbol (`:ProbSymbol`, Event-B only) |
+
+Change or disable them with the `keys` option below.
 
 ## Configuration
 
@@ -243,6 +314,7 @@ require('prob').setup({
   },
   treesitter = true, -- false keeps the regex syntax
   keyboard = true, -- false keeps ASCII combinations as typed in Event-B
+  keys = { group = '<localleader>', animate = '<localleader>a', symbol = '<localleader>s' }, -- false disables one
 })
 ```
 
