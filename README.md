@@ -22,29 +22,21 @@ Neovim plugin (with basic Vim support) for the B method, using the
 
 ## Demo Videos
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d" width="640" controls></video>
-  <br>
-  <em>(Figure 1) Example of using LSP hover and diagnostics</em>
-</p>
+https://github.com/user-attachments/assets/7b679260-08df-485e-81ca-81fcb33dc77d
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac" width="640" controls></video>
-  <br>
-  <em>(Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <kbd>&lt;localleader&gt;</kbd><kbd>s</kbd>)</em>
-</p>
+> (Figure 1) Example of using LSP hover and diagnostics
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e" width="640" controls></video>
-  <br>
-  <em>(Figure 3) Running a simple Event B animation</em>
-</p>
+https://github.com/user-attachments/assets/bd4ea428-d425-42cc-bb76-77a4ec51feac
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09" width="640" controls></video>
-  <br>
-  <em>(Figure 4) Running a more complex Event B animation</em>
-</p>
+> (Figure 2) Example of inputting Unicode symbols for B files using shortcuts (can also be done with <kbd>&lt;localleader&gt;</kbd><kbd>s</kbd>)
+
+https://github.com/user-attachments/assets/e8919953-d6d2-48f8-a30c-508b19fea72e
+
+> (Figure 3) Running a simple Event B animation
+
+https://github.com/user-attachments/assets/7444a9b5-0b9d-41a1-bd9f-0db417456f09
+
+> (Figure 4) Running a more complex Event B animation
 
 ## Supported languages
 
