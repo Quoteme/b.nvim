@@ -22,6 +22,13 @@ M.config = {
   treesitter = true,
   -- Replace ASCII combinations by Event-B symbols while typing, like Rodin.
   keyboard = true,
+  -- Buffer-local mappings in B and Event-B files, shown by which-key if it is
+  -- installed; false disables one.
+  keys = {
+    group = '<leader>b',
+    animate = '<leader>ba',
+    symbol = '<leader>bs',
+  },
 }
 
 local function show_message(err, result, ctx)
@@ -95,6 +102,10 @@ local function enable_lsp()
     handlers = { ['window/showMessage'] = show_message },
   })
   vim.lsp.commands['prob.showPOs'] = show_pos
+  -- The "ProB: animate" code action opens the animation panel.
+  vim.lsp.commands['prob.animate.open'] = function(_, ctx)
+    require('prob.animate').start(ctx.bufnr)
+  end
   vim.lsp.enable('prob')
 end
 
@@ -115,6 +126,43 @@ local function enable_keyboard()
     pattern = 'eventb',
     callback = function(args)
       require('prob.keyboard').attach(args.buf)
+    end,
+  })
+end
+
+--- Animates the model in the current buffer with ProB.
+function M.animate()
+  require('prob.animate').start()
+end
+
+--- Sets the configured mappings in `buf`, and names their group for which-key.
+local function map_keys(buf, filetype)
+  local keys = M.config.keys or {}
+  local function map(lhs, rhs, desc)
+    if lhs then
+      vim.keymap.set('n', lhs, rhs, { buffer = buf, desc = desc })
+    end
+  end
+  map(keys.animate, M.animate, 'Animate with ProB')
+  if filetype == 'eventb' then
+    map(keys.symbol, M.pick_symbol, 'Insert an Event-B symbol')
+  end
+  local ok, wk = pcall(require, 'which-key')
+  if ok and keys.group then
+    if wk.add then
+      wk.add({ { keys.group, group = 'B method', buffer = buf } })
+    elseif wk.register then
+      wk.register({ [keys.group] = { name = '+B method' } }, { buffer = buf })
+    end
+  end
+end
+
+local function enable_keys()
+  vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('prob_keys', { clear = true }),
+    pattern = { 'b', 'eventb' },
+    callback = function(args)
+      map_keys(args.buf, args.match)
     end,
   })
 end
@@ -141,7 +189,12 @@ function M.enable()
   else
     pcall(vim.api.nvim_del_augroup_by_name, 'prob_keyboard')
   end
+  enable_keys()
   vim.api.nvim_create_user_command('ProbSymbol', M.pick_symbol, { desc = 'Insert an Event-B symbol' })
+  vim.api.nvim_create_user_command('ProbAnimate', M.animate, { desc = 'Animate the model with ProB' })
+  vim.api.nvim_create_user_command('ProbAnimateStop', function()
+    require('prob.animate').stop()
+  end, { desc = 'Stop the ProB animation' })
 end
 
 ---@param opts? prob.Config

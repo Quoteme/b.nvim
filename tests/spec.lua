@@ -68,6 +68,103 @@ local function compare(expected, actual)
   return missing, rest
 end
 
+local animation = require('prob.animate')
+
+--- Sends one animation request and waits for the new view.
+local function animation_step(action, argument, count)
+  local before = animation.view()
+  animation.action('request', action, argument, count)
+  if not vim.wait(120000, function() return not animation.busy() and animation.view() ~= before end, 50) then
+    error('timed out waiting for ' .. action)
+  end
+  return animation.view()
+end
+
+--- Runs the steps of an animation spec and compares the resulting view.
+local function animate(spec)
+  animation.start()
+  vim.wait(120000, function() return animation.view() ~= nil and not animation.busy() end, 50)
+  local view = animation.view()
+  for _, step in ipairs(spec.steps) do
+    if type(step) == 'string' then
+      local transition
+      for _, e in ipairs(view.enabled or {}) do
+        if e.name == step then
+          transition = transition or e
+        end
+      end
+      if not transition then
+        animation.stop()
+        return { ('%s is not enabled'):format(step) }
+      end
+      view = animation_step('execute', transition.id)
+    elseif step.with then
+      view = animation_step('executeWith', step.with[1] .. '\0' .. step.with[2])
+    else
+      local action, argument = next(step)
+      local count = type(argument) == 'number' and argument or 1
+      view = animation_step(action, type(argument) == 'string' and argument or tostring(count), count)
+    end
+  end
+
+  local errors = {}
+  local function check(what, expected, actual)
+    if not vim.deep_equal(expected, actual) then
+      table.insert(errors, ('%s: expected %s, got %s'):format(what, vim.inspect(expected), vim.inspect(actual)))
+    end
+  end
+  for _, kind in ipairs({ 'variables', 'constants' }) do
+    if spec[kind] then
+      local actual = {}
+      for _, entry in ipairs(view[kind] or {}) do
+        if spec[kind][entry.name] then
+          actual[entry.name] = entry.value
+        end
+      end
+      check(kind, spec[kind], actual)
+    end
+  end
+  if spec.enabled then
+    -- "add: k = 1" compares the parameters too, a plain "add" only the name.
+    local names = vim.tbl_map(function(e)
+      local detailed = e.parameters ~= '' and (e.name .. ': ' .. e.parameters)
+      return detailed and vim.tbl_contains(spec.enabled, detailed) and detailed or e.name
+    end, view.enabled or {})
+    table.sort(names)
+    local expected = vim.deepcopy(spec.enabled)
+    table.sort(expected)
+    check('enabled', expected, names)
+  end
+  if spec.changed then
+    local changed = {}
+    for _, v in ipairs(view.variables or {}) do
+      if v.changed then
+        table.insert(changed, v.name)
+      end
+    end
+    table.sort(changed)
+    check('changed', spec.changed, changed)
+  end
+  if spec.invariants then
+    local actual = {}
+    for _, inv in ipairs(view.invariants or {}) do
+      actual[inv.label] = inv.ok
+    end
+    check('invariants', spec.invariants, actual)
+  end
+  if spec.deadlock ~= nil then
+    check('deadlock', spec.deadlock, view.deadlock)
+  end
+  if spec.history then
+    check('history', spec.history, vim.tbl_map(function(h) return h.label end, vim.tbl_filter(function(h) return not h.future end, view.history or {})))
+  end
+  if spec.message and not (view.message or ''):find(spec.message, 1, true) then
+    table.insert(errors, ('message: expected %q in %q'):format(spec.message, view.message or ''))
+  end
+  animation.stop()
+  return errors
+end
+
 local function run(spec)
   if spec.typed then
     local text = require('prob.keyboard').translate(spec.typed)
@@ -100,6 +197,10 @@ local function run(spec)
     else
       await(spec.action)
     end
+  end
+
+  if spec.steps then
+    return animate(spec)
   end
 
   local errors = {}
