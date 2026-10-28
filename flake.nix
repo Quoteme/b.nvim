@@ -158,6 +158,7 @@
           pkgs.vim
           pkgs.neovim
           pkgs.tree-sitter
+          pkgs.python3
           vim-prob
           nvim-prob
           prob-vim-test

@@ -49,6 +49,12 @@ stdenv.mkDerivation (finalAttrs: {
     ./eventb-camille.patch
   ];
 
+  # Hover documentation generated from the Rodin Handbook and ProB's
+  # Summary of B Syntax by hover/generate.py.
+  postPatch = ''
+    install -Dm644 -t src/main/resources/hover ${./hover}/eventb.tsv ${./hover}/classical.tsv
+  '';
+
   nativeBuildInputs = [
     gradle
     makeWrapper

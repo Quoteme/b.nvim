@@ -138,6 +138,8 @@ cd b-language-server
 git checkout 16595180e7e02666d0544d6b554715637c3a7ca4
 git apply /path/to/b.nvim/nix/b-language-server/client-compat.patch
 git apply /path/to/b.nvim/nix/b-language-server/eventb-camille.patch
+mkdir -p src/main/resources/hover
+cp /path/to/b.nvim/nix/b-language-server/hover/*.tsv src/main/resources/hover/
 ./gradlew shadowJar
 ```
 
@@ -208,20 +210,24 @@ it is complete, so `<` waits to see whether `<->` follows. Comments and labels
 keep their spelling. `<localleader>s` or `:ProbSymbol` picks a symbol from a list
 and inserts it.
 
-Hover (`K`) explains what is under the cursor:
+Hover (`K`) explains what is under the cursor, in B and Event-B:
 
-- **keywords** such as `constants` or `invariants`, and built-in operators such
-  as `partition` or `card`: a short description with a link to the section of
-  the [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/)
-  (Event-B) or ProB's
-  [Summary of B Syntax](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax)
-  (classical B) that defines them
-- **symbols** such as `∈` or `↦`: their name and ASCII input from Rodin's
-  keyboard table, with the handbook link
-- **identifiers** in Event-B: whether they are a carrier set, constant,
-  variable, parameter or event, where they are declared, and their type as
-  Rodin's type checker infers it, e.g. `Roberta ∈ Personen`
-- **labels** such as `@axm1`: the labelled formula
+- **operators and built-in functions** (`∈`, `↦`, `card`, `\/`, `seq`, …) and
+  **classical B keywords** (`PRE`, `INVARIANT`, …): the official text, generated
+  from the operator tables of the
+  [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/mathematical_notation.html)
+  (with ASCII input, definition, types and well-definedness condition) and from
+  ProB's [Summary of B Syntax](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax),
+  with a link to the section
+- **Event-B keywords** such as `constants` or `invariants`: a short description
+  with a link to the Rodin Handbook
+- **identifiers**: carrier sets, constants, variables, after-values (`x'`),
+  parameters, bound variables of quantifiers, events and components, with
+  their type as Rodin's type checker (Event-B) or ProB (classical B) infers it;
+  operations with their parameters, results and the variables they read and
+  write
+- **labels and events** (`@inv1`, `inc`): the formula and its proof
+  obligations with what ProB made of them, as Rodin lists them per element
 
 Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 
@@ -356,5 +362,7 @@ tree-sitter CLI, plus:
 
 The grammars live in `tree-sitter-b/` and `tree-sitter-eventb/`; run
 `tree-sitter generate --js-runtime native` and `tree-sitter test` there after
-changing `grammar.js`. The Event-B checks are a patch to the language server,
-`nix/b-language-server/eventb-camille.patch`.
+changing `grammar.js`. The Event-B checks, animation and hover are a patch to
+the language server, `nix/b-language-server/eventb-camille.patch`. The hover
+texts for operators and keywords are generated from the official documentation
+by `python3 nix/b-language-server/hover/generate.py`.
