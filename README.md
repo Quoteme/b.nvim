@@ -208,6 +208,21 @@ it is complete, so `<` waits to see whether `<->` follows. Comments and labels
 keep their spelling. `<localleader>s` or `:ProbSymbol` picks a symbol from a list
 and inserts it.
 
+Hover (`K`) explains what is under the cursor:
+
+- **keywords** such as `constants` or `invariants`, and built-in operators such
+  as `partition` or `card`: a short description with a link to the section of
+  the [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/)
+  (Event-B) or ProB's
+  [Summary of B Syntax](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax)
+  (classical B) that defines them
+- **symbols** such as `∈` or `↦`: their name and ASCII input from Rodin's
+  keyboard table, with the handbook link
+- **identifiers** in Event-B: whether they are a carrier set, constant,
+  variable, parameter or event, where they are declared, and their type as
+  Rodin's type checker infers it, e.g. `Roberta ∈ Personen`
+- **labels** such as `@axm1`: the labelled formula
+
 Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 
 - **model check**, which reports deadlocks and invariant violations with the

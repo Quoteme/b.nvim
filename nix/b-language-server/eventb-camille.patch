@@ -12,37 +12,44 @@ index 3a000bc..db819b4 100644
  
  java {
 diff --git a/src/main/kotlin/b/language/server/BDocumentService.kt b/src/main/kotlin/b/language/server/BDocumentService.kt
-index e4d9da2..3b9b0a8 100644
+index e4d9da2..9edfe03 100644
 --- a/src/main/kotlin/b/language/server/BDocumentService.kt
 +++ b/src/main/kotlin/b/language/server/BDocumentService.kt
-@@ -2,7 +2,11 @@ package b.language.server
+@@ -2,7 +2,14 @@ package b.language.server
  
  import b.language.server.communication.CommunicatorInterface
  import b.language.server.proBMangement.ProBInterface
 +import b.language.server.dataStorage.Settings
  import b.language.server.proBMangement.prob.CouldNotFindProBHomeException
++import com.google.gson.JsonObject
 +import com.google.gson.JsonPrimitive
++import b.language.server.proBMangement.prob.Animation
++import b.language.server.proBMangement.prob.Hover as HoverText
 +import org.eclipse.lsp4j.jsonrpc.messages.Either
 +import java.util.concurrent.CompletableFuture
  import org.eclipse.lsp4j.*
  import org.eclipse.lsp4j.services.TextDocumentService
  import java.io.File
-@@ -15,6 +19,14 @@ class BDocumentService(private val server: ServerInterface,
+@@ -15,6 +22,18 @@ class BDocumentService(private val server: ServerInterface,
  
      private val documents = ConcurrentHashMap<String, String>()
      private val issueTracker : ConcurrentHashMap<String, Set<String>> = ConcurrentHashMap()
 +    private val published : ConcurrentHashMap<String, Map<String, List<Diagnostic>>> = ConcurrentHashMap()
++    private val animation by lazy { Animation(communicator) }
 +
 +    companion object {
 +        const val MODEL_CHECK = "prob.modelCheck"
 +        const val DISCHARGE_POS = "prob.dischargePOs"
 +        const val SHOW_POS = "prob.showPOs"
-+        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS)
++        const val ANIMATE = "prob.animate"
++        /** Handled by the client, which opens its animation panel and then sends [ANIMATE]. */
++        const val OPEN_ANIMATION = "prob.animate.open"
++        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS, ANIMATE)
 +    }
  
      /**
       * The document open notification is sent from the client to the server to
-@@ -45,32 +57,22 @@ class BDocumentService(private val server: ServerInterface,
+@@ -45,32 +64,22 @@ class BDocumentService(private val server: ServerInterface,
      /**
       * checks a document via prob and the set options
       * @param file the uri to perform actions on
@@ -81,7 +88,7 @@ index e4d9da2..3b9b0a8 100644
              }catch (e : CouldNotFindProBHomeException){
  
                  communicator.sendDebugMessage(e.localizedMessage, MessageType.Info)
-@@ -80,6 +82,62 @@ class BDocumentService(private val server: ServerInterface,
+@@ -80,6 +89,90 @@ class BDocumentService(private val server: ServerInterface,
  
      }
  
@@ -96,12 +103,26 @@ index e4d9da2..3b9b0a8 100644
 +        published[file.absolutePath] = byFile
 +    }
 +
++    override fun hover(params: HoverParams): CompletableFuture<Hover?> = CompletableFuture.supplyAsync {
++        val uri = params.textDocument.uri
++        val file = File(URI(uri).path)
++        val text = documents[uri] ?: file.takeIf { it.isFile }?.readText() ?: return@supplyAsync null
++        val markdown = try {
++            HoverText.at(file, text, params.position.line, params.position.character)
++        } catch (e : RuntimeException) {
++            communicator.sendDebugMessage("hover failed: ${e.message}", MessageType.Info)
++            null
++        } ?: return@supplyAsync null
++        Hover(MarkupContent(MarkupKind.MARKDOWN, markdown))
++    }
++
 +    override fun codeAction(params: CodeActionParams): CompletableFuture<List<Either<Command, CodeAction>>> {
 +        val uri = params.textDocument.uri
 +        val actions = listOf(
 +            "ProB: model check for deadlocks and invariant violations" to MODEL_CHECK,
 +            "ProB: discharge proof obligations with a longer timeout" to DISCHARGE_POS,
 +            "ProB: list proof obligations" to SHOW_POS,
++            "ProB: animate" to OPEN_ANIMATION,
 +        ).map { (title, command) -> Either.forLeft<Command, CodeAction>(Command(title, command, listOf(uri))) }
 +        return CompletableFuture.completedFuture(actions)
 +    }
@@ -109,6 +130,20 @@ index e4d9da2..3b9b0a8 100644
 +    /** Runs one of [COMMANDS] on the document given as its first argument. */
 +    fun executeCommand(command : String, arguments : List<Any?>) : CompletableFuture<Any?> {
 +        val argument = arguments.firstOrNull()
++        if (command == ANIMATE) {
++            val request = argument as? JsonObject ?: return CompletableFuture.completedFuture(null)
++            fun field(name : String) = request.get(name)?.takeUnless { it.isJsonNull }
++            val action = field("action")?.asString ?: "view"
++            return CompletableFuture.supplyAsync {
++                synchronized(animation) {
++                    when (action) {
++                        "start" -> animation.start(File(URI(field("uri")!!.asString).path))
++                        "stop" -> animation.stop().let { mapOf("stopped" to true) }
++                        else -> animation.perform(action, field("argument")?.asString, field("count")?.asInt ?: 1)
++                    }
++                }
++            }
++        }
 +        val uri = (argument as? JsonPrimitive)?.asString ?: argument?.toString()?.trim('"')
 +            ?: return CompletableFuture.completedFuture(null)
 +        val file = File(URI(uri).path)
@@ -144,6 +179,18 @@ index e4d9da2..3b9b0a8 100644
  
      /**
       * Gets all uris that are no longer contain problems
+@@ -112,8 +205,8 @@ class BDocumentService(private val server: ServerInterface,
+      */
+     override fun didChange(params: DidChangeTextDocumentParams?) {
+ 
+-        communicator.sendDebugMessage("document ${URI(params!!.textDocument.uri).path} was changed", MessageType.Info)
+-        checkDocument(File(URI(params.textDocument.uri).path))
++        // ProB checks the file on disk, so changes are only kept for hovering; saving checks.
++        params!!.contentChanges.lastOrNull()?.let { documents[params.textDocument.uri] = it.text }
+     }
+ 
+ }
+\ No newline at end of file
 diff --git a/src/main/kotlin/b/language/server/BWorkspaceService.kt b/src/main/kotlin/b/language/server/BWorkspaceService.kt
 index 4690a89..1662b6e 100644
 --- a/src/main/kotlin/b/language/server/BWorkspaceService.kt
@@ -166,14 +213,26 @@ index 4690a89..1662b6e 100644
       * The watched files notification is sent from the client to the server when
       * the client detects changes to file watched by the language client.
 diff --git a/src/main/kotlin/b/language/server/Server.kt b/src/main/kotlin/b/language/server/Server.kt
-index 7fe5bab..8ebb3c5 100644
+index 7fe5bab..8c21321 100644
 --- a/src/main/kotlin/b/language/server/Server.kt
 +++ b/src/main/kotlin/b/language/server/Server.kt
-@@ -33,6 +33,8 @@ class Server : LanguageServer, ServerInterface {
+@@ -25,14 +25,18 @@ class Server : LanguageServer, ServerInterface {
+ 
+     override fun initialize(params: InitializeParams?): CompletableFuture<InitializeResult> {
+         val res = InitializeResult(ServerCapabilities())
+-        // ProB checks the file on disk, so only open and save need to trigger a check.
++        // ProB checks the file on disk, so only opening and saving trigger a check.
+         val sync = TextDocumentSyncOptions()
+         sync.openClose = true
+-        sync.change = TextDocumentSyncKind.None
++        // Changes are kept for hovering only; ProB checks the file on disk when it is saved.
++        sync.change = TextDocumentSyncKind.Full
+         sync.save = Either.forRight(SaveOptions(false))
          res.capabilities.textDocumentSync = Either.forRight(sync)
          res.capabilities.workspace = WorkspaceServerCapabilities(WorkspaceFoldersOptions())
          res.capabilities.workspace.workspaceFolders.supported = true
 +        res.capabilities.codeActionProvider = Either.forLeft(true)
++        res.capabilities.hoverProvider = Either.forLeft(true)
 +        res.capabilities.executeCommandProvider = ExecuteCommandOptions(BDocumentService.COMMANDS)
         // res.capabilities.completionProvider = CompletionOptions()
          return CompletableFuture.supplyAsync { res }
@@ -242,6 +301,314 @@ index 43c4789..4adc5ff 100644
 +    /** The proof obligations of an Event-B document from its last check. */
 +    fun proofObligations(file : File) : List<ProofObligation> = emptyList()
 +
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
+new file mode 100644
+index 0000000..44f5715
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
+@@ -0,0 +1,302 @@
++package b.language.server.proBMangement.prob
++
++import b.language.server.communication.CommunicatorInterface
++import com.google.inject.Guice
++import com.google.inject.Injector
++import com.google.inject.Stage
++import de.prob.animator.ReusableAnimator
++import de.prob.animator.command.FindStateCommand
++import de.prob.animator.domainobjects.AbstractEvalResult
++import de.prob.animator.domainobjects.EvalResult
++import de.prob.animator.domainobjects.FormulaExpand
++import de.prob.check.ConsistencyChecker
++import de.prob.check.ModelCheckErrorUncovered
++import de.prob.check.ModelCheckingOptions
++import de.prob.exception.ProBError
++import de.prob.model.eventb.EventBModel
++import de.prob.scripting.FactoryProvider
++import de.prob.statespace.State
++import de.prob.statespace.StateSpace
++import de.prob.statespace.Trace
++import de.prob.statespace.Transition
++import java.io.File
++import java.time.Duration
++
++/**
++ * An animation of a machine, like the views of ProB for Rodin: enabled events with their
++ * parameters, the current state and the history, which can be stepped through.
++ *
++ * It runs in its own ProB process, so that checking files while animating does not disturb it.
++ */
++class Animation(private val communicator : CommunicatorInterface) {
++
++    /** A place in a source file, 0-based. */
++    data class Location(val file : File, val line : Int, val character : Int = 0)
++
++    private val injector : Injector by lazy { Guice.createInjector(Stage.PRODUCTION, ProBKernelModule(communicator)) }
++    private val animator : ReusableAnimator by lazy { injector.getInstance(ReusableAnimator::class.java) }
++
++    private var file : File? = null
++    private var project : CamilleProject? = null
++    private var trace : Trace? = null
++    private var message = ""
++
++    /** Loads [file] and starts a new animation of it. */
++    fun start(file : File) : Map<String, Any?> {
++        stop()
++        this.file = file
++        message = ""
++        val stateSpace = animator.createStateSpace()
++        try {
++            stateSpace.changePreferences(mapOf("MAX_OPERATIONS" to "20", "MAX_INITIALISATIONS" to "20"))
++            if (CamilleProject.isCamille(file.readText())) {
++                val project = CamilleProject(file)
++                val errors = project.check().filter { it.severity == org.eclipse.lsp4j.DiagnosticSeverity.Error }
++                if (errors.isNotEmpty()) {
++                    stateSpace.kill()
++                    return failure("The model has errors; fix them first: ${errors.first().message}")
++                }
++                this.project = project
++                val (model, main) = project.toModel(injector.getInstance(EventBModel::class.java))
++                model.loadIntoStateSpace(stateSpace, main)
++            } else {
++                val factory = injector.getInstance(FactoryProvider.factoryClassFromExtension(file.extension))
++                factory.extract(file.absolutePath).loadIntoStateSpace(stateSpace)
++            }
++        } catch (e : ProBError) {
++            stateSpace.kill()
++            return failure(e.errors.firstOrNull()?.message ?: e.message ?: "ProB could not load the model")
++        }
++        trace = Trace(stateSpace)
++        return view()
++    }
++
++    fun stop() {
++        trace?.stateSpace?.kill()
++        trace = null
++        project = null
++    }
++
++    /** Runs one action of the animation and returns the new view. */
++    fun perform(action : String, argument : String?, count : Int) : Map<String, Any?> {
++        val current = trace ?: return failure("No animation is running")
++        message = ""
++        try {
++            trace = when (action) {
++                "execute" -> current.nextTransitions.firstOrNull { it.id == argument }?.let { current.add(it) } ?: current
++                "executeWith" -> {
++                    val (event, predicate) = (argument ?: "").split('\u0000', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
++                    if (current.canExecuteEvent(event, listOfNotNull(predicate.ifBlank { null }))) {
++                        current.execute(event, listOfNotNull(predicate.ifBlank { null }))
++                    } else {
++                        message = "$event cannot be executed${if (predicate.isBlank()) "" else " with $predicate"}"
++                        current
++                    }
++                }
++                "back" -> generateSequence(current) { if (it.canGoBack()) it.back() else null }.take(count + 1).last()
++                "forward" -> generateSequence(current) { if (it.canGoForward()) it.forward() else null }.take(count + 1).last()
++                "goto" -> current.gotoPosition((argument?.toIntOrNull() ?: 0) - 1)
++                "random" -> current.randomAnimation(count).also {
++                    if (it.transitionList.size < current.transitionList.size + count) message = "Stopped early: no event is enabled"
++                }
++                "find" -> find(current, argument ?: "")
++                "modelCheck" -> modelCheck(current)
++                "restart" -> return start(file ?: return failure("No animation is running"))
++                "view" -> current
++                else -> current
++            }
++        } catch (e : ProBError) {
++            message = e.errors.firstOrNull()?.message ?: e.message ?: "ProB reported an error"
++        } catch (e : IllegalArgumentException) {
++            message = e.message ?: "Invalid input"
++        }
++        return view()
++    }
++
++    private fun find(current : Trace, predicate : String) : Trace {
++        val stateSpace = current.stateSpace
++        val command = FindStateCommand(stateSpace, stateSpace.model.parseFormula(predicate, FormulaExpand.EXPAND), true)
++        stateSpace.execute(command)
++        return when (command.result) {
++            FindStateCommand.ResultType.STATE_FOUND -> command.getTrace(stateSpace).also { message = "Found a state where $predicate" }
++            else -> current.also { message = "No state found where $predicate" }
++        }
++    }
++
++    private fun modelCheck(current : Trace) : Trace {
++        val stateSpace = current.stateSpace
++        val options = ModelCheckingOptions().checkDeadlocks(true).checkInvariantViolations(true)
++            .stateLimit(100000).timeLimit(Duration.ofSeconds(60))
++        val result = ConsistencyChecker(stateSpace, options).call()
++        message = "Model check: ${result.message}"
++        return if (result is ModelCheckErrorUncovered) result.getTrace(stateSpace) else current
++    }
++
++    private fun failure(text : String) = mapOf("error" to text)
++
++    // ----------------------------------------------------------------------
++    // The view sent to the client
++
++    private fun view() : Map<String, Any?> {
++        val trace = trace ?: return failure("No animation is running")
++        val stateSpace = trace.stateSpace
++        val state = trace.currentState
++        val previous = trace.previousState
++        val machine = stateSpace.loadedMachine
++        val sources = Sources(file!!, project)
++
++        val elements = trace.elements
++        val position = trace.currentElements.size - 1
++        val history = elements.drop(1).mapIndexed { index, element ->
++            mapOf("label" to label(element.transition), "index" to index + 1, "future" to (index + 1 > position))
++        }
++
++        fun values(names : List<String>, ready : Boolean, kind : String) = names.map { name ->
++            val value = if (ready) value(state, name) else null
++            val before = if (ready && previous != null && previous.isInitialised == state.isInitialised) value(previous, name) else value
++            mapOf("name" to name, "value" to value, "changed" to (value != before)) + location(sources.declaration(name, kind))
++        }
++
++        val enabled = trace.getNextTransitions(true, FormulaExpand.TRUNCATE).sortedBy { label(it) }.map { transition ->
++            mapOf(
++                "id" to transition.id,
++                "name" to display(transition.name),
++                "event" to transition.name,
++                "parameters" to parameters(transition, machine),
++            ) + location(sources.event(display(transition.name)))
++        }
++        val enabledNames = enabled.map { it["event"] }.toSet()
++        val disabled = if (!state.isInitialised) emptyList() else machine.operationNames.filter { it !in enabledNames && it != INITIALISATION }.sorted().map { name ->
++            mapOf("name" to name, "guards" to sources.guards(name).map { (label, formula) ->
++                mapOf("label" to label, "ok" to holds(state, formula))
++            }) + location(sources.event(name))
++        }
++
++        val invariants = if (!state.isInitialised) emptyList() else {
++            val labelled = sources.invariants()
++            if (labelled.isEmpty()) listOf(mapOf("label" to "INVARIANT", "ok" to state.isInvariantOk) + location(sources.declaration("INVARIANT", "clause")))
++            else labelled.map { (label, formula, at) -> mapOf("label" to label, "ok" to holds(state, formula)) + location(at) }
++        }
++
++        return mapOf(
++            "machine" to sources.name,
++            "file" to file!!.toPath().toUri().toString(),
++            "step" to position,
++            "history" to history,
++            "canBack" to trace.canGoBack(),
++            "canForward" to trace.canGoForward(),
++            "constantsSetUp" to state.isConstantsSetUp,
++            "initialised" to state.isInitialised,
++            "constants" to values(machine.constantNames, state.isConstantsSetUp, "constants"),
++            "variables" to values(machine.variableNames, state.isInitialised, "variables"),
++            "invariants" to invariants,
++            "enabled" to enabled,
++            "disabled" to disabled,
++            "deadlock" to (state.isInitialised && enabled.isEmpty()),
++            "errors" to state.stateErrors.map { "${it.event}: ${it.shortDescription}" },
++            "message" to message,
++        )
++    }
++
++    private fun location(at : Location?) : Map<String, Any?> =
++        if (at == null) emptyMap() else mapOf("uri" to at.file.toPath().toUri().toString(), "line" to at.line, "character" to at.character)
++
++    private fun value(state : State, formula : String) : String? =
++        when (val result : AbstractEvalResult = state.eval(formula, FormulaExpand.TRUNCATE)) {
++            is EvalResult -> result.value
++            else -> null
++        }
++
++    private fun holds(state : State, formula : String) : Boolean? = when (value(state, formula)) {
++        "TRUE" -> true
++        "FALSE" -> false
++        else -> null
++    }
++
++    /** The parameters of [transition]; for the setup and initialisation, the values they choose. */
++    private fun parameters(transition : Transition, machine : de.prob.statespace.LoadedMachine) : String {
++        val chosen = when (transition.name) {
++            "\$setup_constants" -> machine.constantNames
++            "\$initialise_machine" -> machine.variableNames
++            else -> null
++        }
++        if (chosen != null) {
++            return chosen.joinToString(", ") { "$it = ${value(transition.destination, it) ?: "?"}" }
++        }
++        val names = transition.parameterNames
++        val values = transition.parameterValues
++        return if (names.size == values.size && names.isNotEmpty()) names.zip(values).joinToString(", ") { (n, v) -> "$n = $v" }
++        else values.joinToString(", ")
++    }
++
++    private fun label(transition : Transition?) : String {
++        if (transition == null) return ""
++        val parameters = transition.parameterValues
++        return display(transition.name) + if (parameters.isEmpty()) "" else "(${parameters.joinToString(", ")})"
++    }
++
++    private fun display(name : String) = when (name) {
++        "\$setup_constants" -> "SETUP_CONSTANTS"
++        "\$initialise_machine" -> INITIALISATION
++        else -> name
++    }
++
++    /** Where things are declared, from the checked Event-B model or by searching classical B text. */
++    private class Sources(private val file : File, private val project : CamilleProject?) {
++        private val machine = project?.mainInfo as? MachineInfo
++        private val lines by lazy { file.readLines() }
++
++        val name : String = machine?.name ?: (project?.mainInfo as? ContextInfo)?.name ?: file.nameWithoutExtension
++
++        fun event(name : String) : Location? {
++            machine?.let { m -> m.events[name]?.let { return Location(m.component.file, it.token.line - 1, it.token.pos - 1) } }
++            if (project != null) return null
++            return search(Regex("""^\s*(?:[\w,\s]+<--\s*)?${Regex.escape(name)}\s*(\(|=)"""), "OPERATIONS")
++        }
++
++        fun guards(event : String) : List<Pair<String, String>> {
++            val info = machine?.events?.get(event) ?: return emptyList()
++            if (info.parameters.isNotEmpty()) return emptyList()
++            return info.guards.filter { !it.theorem }.map { it.label to it.formula.toString() }
++        }
++
++        fun invariants() : List<Triple<String, String, Location>> =
++            machine?.invariants?.filter { !it.theorem }?.map {
++                Triple(it.label, it.formula.toString(), Location(machine.component.file, it.token.line - 1, it.token.pos - 1))
++            }.orEmpty()
++
++        fun declaration(name : String, kind : String) : Location? {
++            if (project != null) {
++                val files = (machine?.let { listOf(it.component.file) }.orEmpty() + (machine?.contexts ?: (project.mainInfo as? ContextInfo)?.closure()?.toList().orEmpty()).map { it.component.file }).distinct()
++                for (source in files) {
++                    found(source.readLines(), Regex("""(?<![\w'])${Regex.escape(name)}(?![\w'])"""), kind)?.let { return Location(source, it.first, it.second) }
++                }
++                return null
++            }
++            val clause = when (kind) {
++                "variables" -> "VARIABLES"
++                "constants" -> "CONSTANTS"
++                else -> name
++            }
++            return search(Regex("""(?<![\w'])${Regex.escape(name)}(?![\w'])"""), clause)
++        }
++
++        private fun search(pattern : Regex, clause : String) : Location? =
++            found(lines, pattern, clause)?.let { Location(file, it.first, it.second) }
++
++        /** The first match of [pattern] at or after the line that starts [clause]. */
++        private fun found(lines : List<String>, pattern : Regex, clause : String) : Pair<Int, Int>? {
++            val keyword = Regex("""(?i)^\s*(?:ABSTRACT_|CONCRETE_)?${Regex.escape(clause)}\b""")
++            val start = lines.indexOfFirst { keyword.containsMatchIn(it) }
++            if (start < 0) return null
++            for (index in start until lines.size) {
++                // The clause keyword itself is not a declaration.
++                val line = if (index != start) lines[index] else lines[index].let { text ->
++                    keyword.find(text)?.let { text.replaceRange(it.range, " ".repeat(it.value.length)) } ?: text
++                }
++                pattern.find(line)?.let { return index to it.range.first }
++            }
++            return null
++        }
++    }
 +}
 diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Camille.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Camille.kt
 new file mode 100644
@@ -983,6 +1350,344 @@ index 0000000..ad2e0c5
 +        Range(start, Position(start.line, start.character + length.coerceAtLeast(1))),
 +        message, severity, file.toURI().path,
 +    )
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt
+new file mode 100644
+index 0000000..afcf66c
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt
+@@ -0,0 +1,332 @@
++package b.language.server.proBMangement.prob
++
++import java.io.File
++
++/**
++ * Hover documentation: keywords and operators link to the section of the official documentation
++ * that defines them, Event-B identifiers show what they are and the type Rodin's type checker
++ * infers for them.
++ */
++object Hover {
++
++    private const val HANDBOOK = "https://www3.hhu.de/stups/handbook/rodin/current/html/"
++    private const val SYNTAX = "https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax"
++
++    private class Doc(val title : String, val text : String, val link : String, val source : String)
++
++    private fun handbook(page : String, section : String) = "$HANDBOOK$page" to "Rodin Handbook, $section"
++    private fun syntax(anchor : String, section : String) = "$SYNTAX#$anchor" to "ProB, Summary of B Syntax: $section"
++
++    private fun doc(title : String, text : String, where : Pair<String, String>) = Doc(title, text, where.first, where.second)
++
++    private val CONTEXT = handbook("context.html", "3.2.3 Contexts")
++    private val MACHINE = handbook("machine.html", "3.2.4 Machines")
++    private val EVENTS = handbook("machine.html#events", "3.2.4.4 Events")
++
++    /** Event-B in Camille notation. */
++    private val eventbKeywords = mapOf(
++        "context" to doc("context", "The static part of a model: carrier sets, constants and axioms. A context can extend other contexts and is seen by machines.", CONTEXT),
++        "extends" to doc("extends", "In a context: the contexts whose sets, constants and axioms this context includes. In an event: the abstract event whose parameters, guards and actions this event inherits.", handbook("context.html#extendind_a_context", "3.2.3.2 Extending a context")),
++        "sets" to doc("sets", "Carrier sets: new types, given by name. Each set is non-empty; enumerated sets are usually declared with `partition(S, {e1}, …, {en})`.", handbook("context.html#carrier_sets", "3.2.3.1 Carrier Sets")),
++        "constants" to doc("constants", "Constants of the context. Each constant needs an axiom from which its type can be inferred, such as `c ∈ S`.", handbook("context.html#constants_and_axioms", "3.2.3.3 Constants and axioms")),
++        "axioms" to doc("axioms", "Labelled predicates over the sets and constants that are assumed to hold. An axiom marked `theorem` must be proven from the axioms before it.", handbook("context.html#constants_and_axioms", "3.2.3.3 Constants and axioms")),
++        "theorem" to doc("theorem", "Marks an axiom, invariant or guard as a theorem: it must be proven from the predicates before it (proof obligation THM) and may then be used as a hypothesis.", handbook("generated_proof_obligations.html", "3.2.7 Generated proof obligations")),
++        "machine" to doc("machine", "The dynamic part of a model: variables, invariants and the events that change the variables. A machine can refine one machine and see contexts.", MACHINE),
++        "refines" to doc("refines", "In a machine: the abstract machine this machine refines. In an event: the abstract events this event refines; several events are merged.", handbook("machine.html#abstract_machine", "3.2.4.1 Refinement and Abstract machines")),
++        "sees" to doc("sees", "The contexts whose sets and constants the machine can use; their axioms are hypotheses of the machine's proof obligations.", handbook("machine.html#seeing_a_context", "3.2.4.2 Seeing a context")),
++        "variables" to doc("variables", "The state of the machine. Each variable needs an invariant from which its type can be inferred; variables of the abstract machine may be kept.", handbook("machine.html#variables_and_invariants", "3.2.4.3 Variables and invariants")),
++        "invariants" to doc("invariants", "Labelled predicates that must hold in every state: the initialisation must establish them and every event preserve them (proof obligation INV).", handbook("machine.html#variables_and_invariants", "3.2.4.3 Variables and invariants")),
++        "variant" to doc("variant", "An expression, an integer or a finite set, that every convergent event decreases and no anticipated event increases (proof obligations VAR, NAT, FIN).", handbook("machine.html#termination", "3.2.4.8 Termination")),
++        "events" to doc("events", "The events of the machine; INITIALISATION gives the variables their first values.", EVENTS),
++        "event" to doc("event", "A possible state change: when its guards hold for some parameters, its actions may change the variables.", EVENTS),
++        "INITIALISATION" to doc("INITIALISATION", "The event that gives the variables their initial values. It has no parameters and no guards, and its actions must not read the variables.", handbook("machine.html#initialization", "3.2.4.4.5 Initialisation")),
++        "ordinary" to doc("ordinary", "The event may occur any number of times; the variant does not constrain it.", handbook("machine.html#termination", "3.2.4.8 Termination")),
++        "convergent" to doc("convergent", "The event must decrease the variant (proof obligation VAR), so it can only occur finitely often in a row.", handbook("machine.html#termination", "3.2.4.8 Termination")),
++        "anticipated" to doc("anticipated", "The event must not increase the variant; proving that it terminates is left to a refinement.", handbook("machine.html#termination", "3.2.4.8 Termination")),
++        "any" to doc("any", "The parameters of the event. Their types must follow from the guards.", handbook("machine.html#parameters", "3.2.4.4.1 Parameters")),
++        "where" to doc("where", "The guards of the event: it can only occur when they hold. Guards may use constants, the machine's variables and the event's parameters.", handbook("machine.html#guards", "3.2.4.4.2 Guards")),
++        "when" to doc("when", "The guards of an event without parameters.", handbook("machine.html#guards", "3.2.4.4.2 Guards")),
++        "with" to doc("with", "Witnesses: they give values to abstract parameters that the refining event drops (label `p`) and to abstract variables that disappear (label `x'`).", handbook("machine.html#witness", "3.2.4.4.4 Witnesses")),
++        "then" to doc("then", "The actions of the event. They are executed simultaneously; each variable may be assigned in one action only.", handbook("machine.html#actions", "3.2.4.4.3 Actions")),
++        "begin" to doc("begin", "The actions of an event without parameters and guards.", handbook("machine.html#actions", "3.2.4.4.3 Actions")),
++        "end" to doc("end", "Ends an event, machine or context.", handbook("machine.html", "3.2.4 Machines")),
++    )
++
++    /** Classical B. */
++    private val classicalKeywords = buildMap {
++        val header = syntax("Machine_header", "Machine header")
++        val statements = syntax("Statements_(aka_Substitutions)", "Statements (aka Substitutions)")
++        for ((keyword, text) in listOf(
++            "MACHINE" to "Starts an abstract machine, optionally with parameters.",
++            "REFINEMENT" to "Starts a refinement of a machine.",
++            "IMPLEMENTATION" to "Starts an implementation, the last refinement of a machine.",
++            "REFINES" to "The machine or refinement that this component refines.",
++            "SEES" to "Machines whose sets and constants this component may read.",
++            "INCLUDES" to "Machines included in this one; their operations may be called.",
++            "IMPORTS" to "Machines imported by an implementation.",
++            "EXTENDS" to "Machines included and whose operations are promoted.",
++            "PROMOTES" to "Operations of included machines offered as operations of this machine.",
++            "USES" to "Machines whose variables this machine may read.",
++            "CONSTRAINTS" to "Conditions on the machine's parameters.",
++            "SETS" to "Deferred sets (`S`) and enumerated sets (`S = {a, b}`).",
++            "CONSTANTS" to "Constants; their types follow from PROPERTIES.",
++            "ABSTRACT_CONSTANTS" to "Constants that need not be implemented.",
++            "CONCRETE_CONSTANTS" to "Constants that are implemented.",
++            "PROPERTIES" to "Predicates on the sets and constants that are assumed to hold.",
++            "VALUES" to "Values of constants and deferred sets in an implementation.",
++            "VARIABLES" to "The state of the machine; their types follow from INVARIANT.",
++            "ABSTRACT_VARIABLES" to "Variables that need not be implemented.",
++            "CONCRETE_VARIABLES" to "Variables that are implemented.",
++            "INVARIANT" to "Predicates that hold in every state of the machine.",
++            "ASSERTIONS" to "Predicates that follow from the invariant.",
++            "INITIALISATION" to "The substitution giving the variables their first values.",
++            "OPERATIONS" to "The operations of the machine: `out <-- name(params) = substitution`.",
++            "LOCAL_OPERATIONS" to "Operations only available inside an implementation.",
++            "DEFINITIONS" to "Macros, written `name(params) == body`, expanded where they are used.",
++            "END" to "Ends the component or a substitution.",
++        )) put(keyword, Doc(keyword, text, header.first, header.second))
++        for ((keyword, text) in listOf(
++            "skip" to "The substitution that changes nothing.",
++            "BEGIN" to "Groups a substitution: `BEGIN S END`.",
++            "PRE" to "Precondition: `PRE P THEN S END` may only be called when P holds.",
++            "ASSERT" to "`ASSERT P THEN S END`: P must hold.",
++            "IF" to "Conditional: `IF P THEN S ELSIF Q THEN T ELSE U END`.",
++            "SELECT" to "Guarded choice: `SELECT P THEN S WHEN Q THEN T ELSE U END`.",
++            "ANY" to "Non-deterministic choice of values: `ANY x WHERE P THEN S END`.",
++            "LET" to "Local definitions: `LET x BE x = E IN S END`.",
++            "VAR" to "Local variables: `VAR x IN S END`.",
++            "CHOICE" to "Non-deterministic choice between substitutions: `CHOICE S OR T END`.",
++            "CASE" to "Case distinction: `CASE E OF EITHER v THEN S OR w THEN T ELSE U END END`.",
++            "WHILE" to "Loop: `WHILE P DO S INVARIANT I VARIANT V END`.",
++        )) put(keyword, Doc(keyword, text, statements.first, statements.second))
++    }
++
++    private val SETS = handbook("sets.html", "3.3.4 Sets")
++    private val RELATIONS = handbook("relations.html", "3.3.5 Relations")
++    private val ARITHMETIC = handbook("arithmetic.html", "3.3.6 Arithmetic")
++    private val PREDICATES = handbook("predicates.html", "3.3.2 Predicates")
++    private val ASSIGNMENTS = handbook("assignments.html", "3.3.8 Assignments")
++
++    /** Rodin's keyboard table (org.eventb.keyboard): symbol to its name and ASCII input. */
++    private val symbols : Map<String, Doc> = listOf(
++        Triple("ℕ", "NAT", "Set of natural numbers") to handbook("arithmetic.html#a0000000428", "3.3.6.1 Sets of numbers"),
++        Triple("ℕ1", "NAT1", "Set of positive natural numbers") to handbook("arithmetic.html#a0000000428", "3.3.6.1 Sets of numbers"),
++        Triple("ℤ", "INT", "Set of integers") to handbook("arithmetic.html#a0000000428", "3.3.6.1 Sets of numbers"),
++        Triple("∧", "&", "Conjunction") to handbook("predicates.html#a0000000349", "3.3.2.2 Logical operators"),
++        Triple("⇒", "=>", "Implication") to handbook("predicates.html#a0000000349", "3.3.2.2 Logical operators"),
++        Triple("⇔", "<=>", "Equivalence") to handbook("predicates.html#a0000000349", "3.3.2.2 Logical operators"),
++        Triple("¬", "not", "Negation") to handbook("predicates.html#a0000000349", "3.3.2.2 Logical operators"),
++        Triple("∨", "or", "Disjunction") to handbook("predicates.html#a0000000349", "3.3.2.2 Logical operators"),
++        Triple("⊤", "true", "Truth") to handbook("predicates.html#a0000000344", "3.3.2.1 Logical primitives"),
++        Triple("⊥", "false", "Falsity") to handbook("predicates.html#a0000000344", "3.3.2.1 Logical primitives"),
++        Triple("∀", "!", "Universal quantifier") to handbook("predicates.html#quantified_predicates", "3.3.2.3 Quantified predicates"),
++        Triple("∃", "#", "Existential quantifier") to handbook("predicates.html#quantified_predicates", "3.3.2.3 Quantified predicates"),
++        Triple("·", ".", "Quantifier dot") to handbook("predicates.html#quantified_predicates", "3.3.2.3 Quantified predicates"),
++        Triple("∈", ":", "Element of") to handbook("predicates.html#membership", "3.3.2.5 Membership"),
++        Triple("∉", "/:", "Not element of") to handbook("predicates.html#membership", "3.3.2.5 Membership"),
++        Triple("=", "=", "Equality") to handbook("predicates.html#equality", "3.3.2.4 Equality"),
++        Triple("≠", "/=", "Not equal") to handbook("predicates.html#equality", "3.3.2.4 Equality"),
++        Triple("ℙ", "POW", "Power set") to handbook("sets.html#a0000000381", "3.3.4.5 Power sets"),
++        Triple("ℙ1", "POW1", "Non-empty power set") to handbook("sets.html#a0000000381", "3.3.4.5 Power sets"),
++        Triple("×", "**", "Cartesian product") to handbook("relations.html#pairs_and_cartesian_product", "3.3.5.1 Pairs and Cartesian product"),
++        Triple("↦", "|->", "Maps to (pair)") to handbook("relations.html#pairs_and_cartesian_product", "3.3.5.1 Pairs and Cartesian product"),
++        Triple("∣", "|", "Separator") to handbook("sets.html#set_comprehensions", "3.3.4.1 Set comprehensions"),
++        Triple("⊆", "<:", "Subset or equal") to handbook("sets.html#subsets", "3.3.4.3 Subsets"),
++        Triple("⊈", "/<:", "Not subset or equal") to handbook("sets.html#subsets", "3.3.4.3 Subsets"),
++        Triple("⊂", "<<:", "Strict subset") to handbook("sets.html#subsets", "3.3.4.3 Subsets"),
++        Triple("⊄", "/<<:", "Not strict subset") to handbook("sets.html#subsets", "3.3.4.3 Subsets"),
++        Triple("∪", "\\/", "Union") to handbook("sets.html#a0000000375", "3.3.4.4 Operations on sets"),
++        Triple("∩", "/\\", "Intersection") to handbook("sets.html#a0000000375", "3.3.4.4 Operations on sets"),
++        Triple("∖", "\\", "Set minus") to handbook("sets.html#a0000000375", "3.3.4.4 Operations on sets"),
++        Triple("∅", "{}", "Empty set") to handbook("sets.html#a0000000371", "3.3.4.2 Basic sets"),
++        Triple("⋃", "UNION", "Generalised union") to handbook("sets.html#a0000000392", "3.3.4.9 Quantified union and intersection"),
++        Triple("⋂", "INTER", "Generalised intersection") to handbook("sets.html#a0000000392", "3.3.4.9 Quantified union and intersection"),
++        Triple("↔", "<->", "Binary relation") to handbook("relations.html#a0000000398", "3.3.5.2 Relations"),
++        Triple("", "<<->", "Total relation") to handbook("relations.html#a0000000398", "3.3.5.2 Relations"),
++        Triple("", "<->>", "Surjective relation") to handbook("relations.html#a0000000398", "3.3.5.2 Relations"),
++        Triple("", "<<->>", "Surjective total relation") to handbook("relations.html#a0000000398", "3.3.5.2 Relations"),
++        Triple("∼", "~", "Converse") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple("∘", "circ", "Backward composition") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple(";", ";", "Forward composition") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple("◁", "<|", "Domain restriction") to handbook("relations.html#domain_and_range_restrictions", "3.3.5.4 Domain and Range Restrictions"),
++        Triple("▷", "|>", "Range restriction") to handbook("relations.html#domain_and_range_restrictions", "3.3.5.4 Domain and Range Restrictions"),
++        Triple("⩤", "<<|", "Domain subtraction") to handbook("relations.html#domain_and_range_restrictions", "3.3.5.4 Domain and Range Restrictions"),
++        Triple("⩥", "|>>", "Range subtraction") to handbook("relations.html#domain_and_range_restrictions", "3.3.5.4 Domain and Range Restrictions"),
++        Triple("", "<+", "Relation override") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple("⊗", "><", "Direct product") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple("∥", "||", "Parallel product") to handbook("relations.html#operations_on_relations", "3.3.5.5 Operations on relations"),
++        Triple("λ", "%", "Lambda abstraction") to handbook("relations.html#lambda", "3.3.5.10 Lambda"),
++        Triple("⇸", "+->", "Partial function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("→", "-->", "Total function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("⤔", ">+>", "Partial injective function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("↣", ">->", "Total injective function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("⤀", "+>>", "Partial surjective function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("↠", "->>", "Total surjective function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("⤖", ">->>", "Total bijective function") to handbook("relations.html#a0000000421", "3.3.5.8 Sets of functions"),
++        Triple("‥", "..", "Up to (integer interval)") to handbook("arithmetic.html#a0000000428", "3.3.6.1 Sets of numbers"),
++        Triple("<", "<", "Less than") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple(">", ">", "Greater than") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("≤", "<=", "Less than or equal") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("≥", ">=", "Greater than or equal") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("+", "+", "Addition") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("−", "-", "Minus") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("∗", "*", "Multiply") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("÷", "/", "Divide (integer division)") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("^", "^", "Exponentiation") to handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations"),
++        Triple("≔", ":=", "Becomes equal") to handbook("assignments.html#deterministic_assignments", "3.3.8.1 Deterministic Assignments"),
++        Triple(":∈", "::", "Becomes in") to handbook("assignments.html#a0000000450", "3.3.8.3 Non-deterministic assignment by sets"),
++        Triple(":∣", ":|", "Becomes such that") to handbook("assignments.html#nondeterministic_assignments", "3.3.8.2 Non-deterministic assignment with before-after-predicate"),
++        Triple("⦂", "oftype", "Oftype: gives an expression its type") to handbook("typing.html", "3.3.7 Typing"),
++    ).associate { (symbol, where) -> symbol.first to Doc(symbol.third, "Typed as `${symbol.second}`.", where.first, where.second) }
++
++    /** Operators written as words in Event-B. */
++    private val builtins = mapOf(
++        "card" to doc("card(S)", "The number of elements of the finite set S.", handbook("sets.html#a0000000383", "3.3.4.6 Finite sets")),
++        "finite" to doc("finite(S)", "Holds if the set S is finite.", handbook("sets.html#a0000000383", "3.3.4.6 Finite sets")),
++        "partition" to doc("partition(S, A, B, …)", "S is the union of the pairwise disjoint sets A, B, …; with singletons, it enumerates S.", handbook("sets.html#partition", "3.3.4.7 Partition")),
++        "union" to doc("union(S)", "The union of all sets in the set of sets S.", handbook("sets.html#a0000000389", "3.3.4.8 Generalized union and intersection")),
++        "inter" to doc("inter(S)", "The intersection of all sets in the non-empty set of sets S.", handbook("sets.html#a0000000389", "3.3.4.8 Generalized union and intersection")),
++        "dom" to doc("dom(r)", "The domain of the relation r.", handbook("relations.html#domain_and_range", "3.3.5.3 Domain and Range")),
++        "ran" to doc("ran(r)", "The range of the relation r.", handbook("relations.html#domain_and_range", "3.3.5.3 Domain and Range")),
++        "id" to doc("id", "The identity relation.", handbook("relations.html#constant_relations", "3.3.5.7 Constant relations")),
++        "prj1" to doc("prj1", "The projection of a pair to its first component.", handbook("relations.html#constant_relations", "3.3.5.7 Constant relations")),
++        "prj2" to doc("prj2", "The projection of a pair to its second component.", handbook("relations.html#constant_relations", "3.3.5.7 Constant relations")),
++        "min" to doc("min(S)", "The smallest element of a non-empty set of integers with a lower bound.", handbook("arithmetic.html#minimum_and_maximum", "3.3.6.3 Minimum and Maximum")),
++        "max" to doc("max(S)", "The largest element of a non-empty set of integers with an upper bound.", handbook("arithmetic.html#minimum_and_maximum", "3.3.6.3 Minimum and Maximum")),
++        "mod" to doc("a mod b", "The remainder of the integer division of a by b.", handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations")),
++        "succ" to doc("succ", "The successor function on integers.", handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations")),
++        "pred" to doc("pred", "The predecessor function on integers.", handbook("arithmetic.html#arithmetic_operations", "3.3.6.2 Arithmetic operations")),
++        "bool" to doc("bool(P)", "TRUE if the predicate P holds, FALSE otherwise.", handbook("booleans.html", "3.3.3 Booleans")),
++        "BOOL" to doc("BOOL", "The set of booleans, {TRUE, FALSE}.", handbook("booleans.html", "3.3.3 Booleans")),
++        "TRUE" to doc("TRUE", "The boolean value true.", handbook("booleans.html", "3.3.3 Booleans")),
++        "FALSE" to doc("FALSE", "The boolean value false.", handbook("booleans.html", "3.3.3 Booleans")),
++    )
++
++    /**
++     * The hover text for the position (0-based line and UTF-16 column) in [file], or null.
++     * [text] is the file's content as the editor has it.
++     */
++    fun at(file : File, text : String, line : Int, column : Int) : String? {
++        val lines = text.lines()
++        val source = lines.getOrNull(line) ?: return null
++        val camille = CamilleProject.isCamille(text)
++
++        symbolAt(source, column)?.let { return render(it) }
++
++        val word = wordAt(source, column) ?: return null
++        if (word.startsWith("@")) {
++            return if (camille) label(file, word.removePrefix("@")) else null
++        }
++        if (camille) {
++            eventbKeywords[word]?.let { return render(it) }
++            builtins[word]?.let { return render(it) }
++            identifier(file, word, line)?.let { return it }
++        } else {
++            classicalKeywords[word]?.let { return render(it) }
++        }
++        return null
++    }
++
++    private fun render(doc : Doc) = "**${doc.title}**\n\n${doc.text}\n\n[${doc.source}](${doc.link})"
++
++    private fun isWordChar(c : Char) = c.isLetterOrDigit() || c == '_' || c == '\''
++
++    private fun wordAt(source : String, column : Int) : String? {
++        if (column !in source.indices || !(isWordChar(source[column]) || source[column] == '@')) return null
++        var start = column
++        while (start > 0 && (isWordChar(source[start - 1]) || source[start - 1] == '@')) start--
++        var end = column
++        while (end < source.length && isWordChar(source[end])) end++
++        return source.substring(start, end).takeIf { it.isNotBlank() }
++    }
++
++    private fun symbolAt(source : String, column : Int) : Doc? {
++        if (column !in source.indices) return null
++        // Two-character symbols first, then the character itself.
++        for (start in listOf(column - 1, column)) {
++            if (start >= 0 && start + 2 <= source.length) symbols[source.substring(start, start + 2)]?.let { return it }
++        }
++        val char = source[column]
++        if (char == '1' && column > 0) symbols[source.substring(column - 1, column + 1)]?.let { return it }
++        return if (char.isLetterOrDigit() && char !in "ℕℤℙλ") null else symbols[char.toString()]
++    }
++
++    // ----------------------------------------------------------------------
++    // Event-B identifiers and labels, from the checked model
++
++    private fun checked(file : File) : Any? = CamilleProject(file).also { it.check() }.mainInfo
++
++    private fun typed(name : String, type : org.eventb.core.ast.Type?) =
++        if (type == null) "`$name`" else "`$name ∈ ${type.toExpression()}`"
++
++    private fun identifier(file : File, name : String, line : Int) : String? {
++        val info = checked(file) ?: return null
++        val contexts = when (info) {
++            is MachineInfo -> info.contexts
++            is ContextInfo -> info.closure().toList()
++            else -> emptyList()
++        }
++        for (context in contexts.reversed()) {
++            if (name in context.sets) {
++                return "**carrier set** `$name`\n\nDeclared in context `${context.name}`. A new type.\n\n" + link(handbook("context.html#carrier_sets", "3.2.3.1 Carrier Sets"))
++            }
++            if (name in context.constants) {
++                val type = if (context.env.contains(name)) context.env.getType(name) else null
++                return "**constant** ${typed(name, type)}\n\nDeclared in context `${context.name}`.\n\n" + link(handbook("context.html#constants_and_axioms", "3.2.3.3 Constants and axioms"))
++            }
++        }
++        if (info !is MachineInfo) return null
++
++        var machine : MachineInfo? = info
++        while (machine != null) {
++            if (name in machine.variables) {
++                val type = if (info.env.contains(name)) info.env.getType(name) else null
++                val kept = if (machine !== info) " (abstract)" else ""
++                return "**variable**$kept ${typed(name, type)}\n\nDeclared in machine `${machine.name}`.\n\n" + link(handbook("machine.html#variables_and_invariants", "3.2.4.3 Variables and invariants"))
++            }
++            machine = machine.abstract
++        }
++
++        info.events[name]?.let { event ->
++            val parts = mutableListOf<String>()
++            if (event.convergence != Convergence.ORDINARY) parts += event.convergence.name.lowercase()
++            if (event.refines.isNotEmpty()) parts += (if (event.extended) "extends " else "refines ") + event.refines.joinToString(", ") { it.name }
++            val parameters = event.parameters.entries.joinToString(", ") { (p, type) -> "$p ∈ ${type.toExpression()}" }
++            return "**event** `$name`" + (if (parts.isEmpty()) "" else " (${parts.joinToString(", ")})") +
++                (if (parameters.isEmpty()) "" else "\n\nParameters: `$parameters`") + "\n\n" + link(EVENTS)
++        }
++
++        // A parameter of the event the line belongs to.
++        val event = info.events.values.filter { it.token.line - 1 <= line }.maxByOrNull { it.token.line }
++        event?.parameters?.get(name)?.let { type ->
++            return "**parameter** ${typed(name, type)}\n\nOf event `${event.name}`.\n\n" + link(handbook("machine.html#parameters", "3.2.4.4.1 Parameters"))
++        }
++        return null
++    }
++
++    private fun label(file : File, name : String) : String? {
++        val info = checked(file) ?: return null
++        val contexts = when (info) {
++            is MachineInfo -> info.contexts
++            is ContextInfo -> info.closure().toList()
++            else -> emptyList()
++        }
++        fun describe(kind : String, labeled : Labeled<*>, where : Pair<String, String>) =
++            "**${if (labeled.theorem) "theorem" else kind}** `$name`\n\n```eventb\n${labeled.formula}\n```\n\n" + link(where)
++
++        if (info is MachineInfo) {
++            info.invariants.firstOrNull { it.label == name }?.let { return describe("invariant", it, handbook("machine.html#variables_and_invariants", "3.2.4.3 Variables and invariants")) }
++            for (event in info.events.values) {
++                event.guards.firstOrNull { it.label == name }?.let { return describe("guard of ${event.name}", it, handbook("machine.html#guards", "3.2.4.4.2 Guards")) }
++                event.actions.firstOrNull { it.label == name }?.let { return describe("action of ${event.name}", it, handbook("machine.html#actions", "3.2.4.4.3 Actions")) }
++                event.witnesses.firstOrNull { it.label == name }?.let { return describe("witness of ${event.name}", it, handbook("machine.html#witness", "3.2.4.4.4 Witnesses")) }
++            }
++        }
++        for (context in contexts) {
++            context.axioms.firstOrNull { it.label == name }?.let { return describe("axiom", it, handbook("context.html#constants_and_axioms", "3.2.3.3 Constants and axioms")) }
++        }
++        return null
++    }
++
++    private fun link(where : Pair<String, String>) = "[${where.second}](${where.first})"
 +}
 diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
 index 9992b9d..65b2662 100644

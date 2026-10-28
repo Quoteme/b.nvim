@@ -44,8 +44,8 @@ stdenv.mkDerivation (finalAttrs: {
     # prob-java to probcli 1.16.
     ./client-compat.patch
     # Checks Event-B machines and contexts written in Camille notation like
-    # Rodin: static checks, proof obligations discharged with ProB, and model
-    # checking as a code action.
+    # Rodin: static checks, proof obligations discharged with ProB, model
+    # checking and animation as code actions, and hover documentation.
     ./eventb-camille.patch
   ];
 

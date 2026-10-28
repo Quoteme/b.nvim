@@ -205,6 +205,21 @@ local function run(spec)
   if spec.steps then
     return animate(spec)
   end
+  if spec.hover then
+    local client = vim.lsp.get_clients({ bufnr = 0, name = 'prob' })[1]
+    local response = client:request_sync('textDocument/hover', {
+      textDocument = { uri = vim.uri_from_bufnr(0) },
+      position = { line = spec.hover[1] - 1, character = spec.hover[2] - 1 },
+    }, 60000, 0)
+    local text = response and response.result and response.result.contents.value or ''
+    local errors = {}
+    for _, want in ipairs(spec.shows) do
+      if not text:find(want, 1, true) then
+        table.insert(errors, ('hover lacks %q: %q'):format(want, text))
+      end
+    end
+    return errors
+  end
 
   local errors = {}
   local missing, extra = compare(spec.expect, problems(dir))
