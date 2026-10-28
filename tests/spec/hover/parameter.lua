@@ -22,5 +22,5 @@ end
 ]],
   },
   hover = { 13, 13 },
-  shows = { '**parameter** `k ∈ ℤ`', 'Of event `add`' },
+  shows = { '(parameter) k ∈ ℤ', 'A parameter of event `add`.', '@grd1 k ∈ 1 ‥ 3' },
 }

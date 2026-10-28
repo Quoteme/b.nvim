@@ -10,5 +10,5 @@ END
 ]],
   },
   hover = { 3, 2 },
-  shows = { '`INVARIANT P` — logical predicate', 'https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax#Machine_sections' },
+  shows = { '```b\nINVARIANT P\n```', 'Logical predicate', '**Example**', 'https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax#Machine_sections' },
 }

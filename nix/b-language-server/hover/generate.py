@@ -6,8 +6,9 @@
   well-definedness condition.
 - classical.tsv: ProB's "Summary of B Syntax".
 
-Each line is: key, title, description, details, link, source, and "1" if
-the key names the entry rather than being part of it (tab-separated).
+Each line is: key, title, description, details, link, source, "1" if the key
+names the entry rather than being part of it, and the operator's symbol
+(tab-separated).
 
 Usage: python3 generate.py   (writes the files next to this script)
 """
@@ -80,6 +81,27 @@ def latex(text):
     text = re.sub(r"\\[,;! ]", " ", text)
     text = text.replace("\\", "")
     text = re.sub(r"\s*_\s*([0-9A-Za-z])", r"\1", text)
+    return tidy(text)
+
+
+BINARY = "∈∉⊆⊂⊈⊄∪∩∖↦×⇒⇔∧∨=≠≤≥<>+·÷⇸→⤔↣⤀↠⤖↔◁▷⩤⩥∘⊗∥≙∣\ue100\ue101\ue102\ue103"
+
+
+def tidy(text):
+    """Spaces formulas the way Rodin prints them: around binary operators, not inside brackets."""
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*([" + BINARY + r"])\s*", r" \1 ", text)
+    text = re.sub(r"([(\[{])\s+", r"\1", text)
+    text = re.sub(r"\s+([)\]},])", r"\1", text)
+    # Function applications, but not prose like "injective (is an injection)".
+    text = re.sub(r"(?<![A-Za-z])([A-Za-z]|ℙ1?|L|dom|ran|card|finite|min|max|union|inter|bool|id|prj[12]|partition)\s+\(", r"\1(", text)
+    text = re.sub(r"\s+'", "'", text)
+    # Assignments and the override symbol are drawn from two symbols each.
+    text = re.sub(r":\s*=", "≔", text)
+    text = re.sub(r":\s*∣", ":∣", text)
+    text = re.sub(r":\s*∈", ":∈", text)
+    text = re.sub(r"◁\s*-", "\ue103", text)
+    text = re.sub(r"‥\s+", "‥", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -140,7 +162,8 @@ def handbook():
                     # The HTML renders "--" as an en dash.
                     ascii_ = html.unescape(re.sub(r"<[^>]+>", "", cells[1])).strip().replace("–", "--")
                     name = latex(re.sub(r"<[^>]+>", "", cells[2]))
-                    if not name:
+                    # Truth tables list values, not operators.
+                    if not name or name in ("⊤", "⊥"):
                         continue
                     details = []
                     if ascii_:
@@ -153,7 +176,7 @@ def handbook():
                     symbol = symbols.get(ascii_, symbol)
                     for key in dict.fromkeys([symbol, ascii_]):
                         if key and " " not in key and "$" not in key and not re.fullmatch(r"[A-Za-z]|exprs|\{.*\}.+|\{(?:exprs|E\|P|ids\..*)\}|…|\(…\)|\[…\]", key):
-                            rows.append((key, name, description, DETAILS.join(details), link, where, "1"))
+                            rows.append((key, name, description, DETAILS.join(details), link, where, "1", symbol))
     return rows
 
 
@@ -169,7 +192,9 @@ LOWERCASE_WORDS = {"mod", "or", "not", "btrue", "bfalse", "skip"}
 def keys_of(syntax):
     """The keywords, built-in functions and operators of an entry's syntax."""
     keys = []
-    for alternative in re.split(r"\s+or\s+", re.sub(r'"[^"]*"', "", syntax)):
+    # "S-T or S \ T" lists alternatives; in "P or Q", or is the operator.
+    alternatives = [syntax] if syntax == "P or Q" else re.split(r"\s+or\s+", syntax)
+    for alternative in (re.sub(r'"[^"]*"', "", a) for a in alternatives):
         for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", alternative):
             keyword = re.fullmatch(r"[A-Z][A-Z0-9_]+", word) is not None
             function = re.search(re.escape(word) + r"\(", alternative) is not None and word[0].islower()
@@ -180,11 +205,16 @@ def keys_of(syntax):
         for operator in re.findall(r"[^\sA-Za-z0-9_(),.\[\]{}'\"`$]+", alternative):
             if operator not in keys and operator not in ("...", "…", "_", "•"):
                 keys.append(operator)
+    if not keys:
+        # Constructs made of brackets and dots alone: n..m, r[S], [E], E'ID.
+        for operator in re.findall(r"(?<!\.)\.\.(?!\.)|[\['<>]", syntax):
+            if operator not in keys:
+                keys.append(operator)
     return keys
 
 
 # Sections of explanations rather than syntax.
-PROSE = {"Differences with AtelierB/B4Free", "Other notes", "Free Types", "Event-B Syntax", "Comments and Pragmas"}
+PROSE = {"Differences with AtelierB/B4Free", "Other notes", "Free Types", "Event-B Syntax", "Comments and Pragmas", "Identifiers"}
 
 
 def syntax_summary():
@@ -213,14 +243,15 @@ def syntax_summary():
             argument = re.split(r"\s{2,}", description, maxsplit=1)
             syntax = f"{syntax} {argument[0]}"
             description = argument[1].strip("()") if len(argument) == 2 else ""
-        if syntax.startswith("-"):
+        # Explanations continued inside the tables, such as "mirror, infix are recognised by …".
+        if syntax.startswith("-") or len(re.findall(r"\b[a-z]{3,}\b", syntax)) >= 4:
             continue
         link = SYNTAX + "#" + section.replace(" ", "_")
         where = f"ProB, Summary of B Syntax: {section}"
         keys = keys_of(syntax)
         for key in keys:
             # The first key names the construct; THEN in IF … THEN … END does not.
-            rows.append((key, syntax, description, "", link, where, "1" if key == keys[0] else ""))
+            rows.append((key, syntax, description, "", link, where, "1" if key == keys[0] else "", ""))
     return rows
 
 

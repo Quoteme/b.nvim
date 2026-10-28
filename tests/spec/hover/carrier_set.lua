@@ -14,5 +14,5 @@ end
 ]],
   },
   hover = { 3, 3 },
-  shows = { '**carrier set** `Personen`', 'https://www3.hhu.de/stups/handbook/rodin/current/html/context.html#carrier_sets' },
+  shows = { '(carrier set) Personen', 'partition(Personen, {Roberta})', 'https://www3.hhu.de/stups/handbook/rodin/current/html/context.html#carrier_sets' },
 }

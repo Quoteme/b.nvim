@@ -10,5 +10,5 @@ end
 ]],
   },
   hover = { 4, 10 },
-  shows = { '**bound variable** `x ∈ S`', 'In `axm1`' },
+  shows = { '(bound variable) x ∈ S', 'Bound in `@axm1`', '@axm1 ∀x·x ∈ S ⇒ x = x' },
 }

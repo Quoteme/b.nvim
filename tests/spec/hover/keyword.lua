@@ -14,5 +14,5 @@ end
 ]],
   },
   hover = { 4, 3 },
-  shows = { '**constants**', 'https://www3.hhu.de/stups/handbook/rodin/current/html/context.html#constants_and_axioms' },
+  shows = { '```eventb\nconstants c …\n```', 'Each constant needs an axiom', '**Example**', 'https://www3.hhu.de/stups/handbook/rodin/current/html/context.html#constants_and_axioms' },
 }

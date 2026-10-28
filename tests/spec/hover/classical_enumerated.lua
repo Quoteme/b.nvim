@@ -13,5 +13,5 @@ END
 ]],
   },
   hover = { 2, 14 },
-  shows = { '**element of an enumerated set** `red : COL`' },
+  shows = { '(element) red : COL' },
 }

@@ -14,5 +14,5 @@ end
 ]],
   },
   hover = { 7, 4 },
-  shows = { '**axiom** `axm1`', 'partition(Personen,{Roberta})' },
+  shows = { '```eventb\n@axm1 partition(Personen, {Roberta})\n```', '`@axm1` is an axiom of `c0`.' },
 }

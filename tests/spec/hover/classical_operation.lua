@@ -13,5 +13,5 @@ END
 ]],
   },
   hover = { 7, 9 },
-  shows = { '**operation** `r <-- step(k)`', 'Parameters: `k : INTEGER`', 'Results: `r : POW(INTEGER)`', 'Writes: `n`' },
+  shows = { '(operation) r : POW(INTEGER) <-- step(k : INTEGER)', 'Writes: `n`' },
 }

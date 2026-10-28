@@ -14,5 +14,5 @@ end
 ]],
   },
   hover = { 7, 10 },
-  shows = { '**Partitions of a set**', 'https://www3.hhu.de/stups/handbook/rodin/current/html/sets.html#partition' },
+  shows = { '```eventb\npartition(S, A, B, …)\n```', '**Partitions of a set**', 'partition(1 ‥ 4, {1, 2}, {3, 4})', 'https://www3.hhu.de/stups/handbook/rodin/current/html/sets.html#partition' },
 }

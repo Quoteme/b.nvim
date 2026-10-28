@@ -13,5 +13,5 @@ END
 ]],
   },
   hover = { 7, 59 },
-  shows = { '`S\\/T` — set union', 'https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax#Sets' },
+  shows = { '```b\nS\\/T\n```', 'Set union', '{1, 2} \\/ {2, 3} = {1, 2, 3}', 'https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax#Sets' },
 }

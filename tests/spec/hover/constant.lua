@@ -14,5 +14,5 @@ end
 ]],
   },
   hover = { 5, 3 },
-  shows = { '**constant** `Roberta ∈ Personen`' },
+  shows = { '(constant) Roberta ∈ Personen', 'A constant of context `c0`.', '@axm1 partition(Personen, {Roberta})' },
 }

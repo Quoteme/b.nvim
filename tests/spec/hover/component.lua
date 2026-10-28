@@ -13,5 +13,5 @@ end
 ]],
   },
   hover = { 1, 17 },
-  shows = { '**context** `c0` (c0.mch)', 'Sets: `S`' },
+  shows = { 'context c0\n  sets S\nend', 'In `c0.mch`' },
 }

@@ -19,5 +19,5 @@ end
 ]],
   },
   hover = { 4, 4 },
-  shows = { '**invariant** `inv1`', '✓ `INITIALISATION/inv1/INV`', '✗ `inc/inv1/INV` does not hold' },
+  shows = { '```eventb\n@inv1 n ≤ 3\n```', '`@inv1` is an invariant of `m0`.', '✓ `INITIALISATION/inv1/INV`', '✗ `inc/inv1/INV` does not hold' },
 }

@@ -13,5 +13,5 @@ END
 ]],
   },
   hover = { 4, 11 },
-  shows = { '**variable** `n : INTEGER`' },
+  shows = { '(variable) n : INTEGER' },
 }

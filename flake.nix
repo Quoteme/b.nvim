@@ -136,6 +136,7 @@
               {
                 nativeBuildInputs = [
                   b-language-server
+                  prob
                   prob-spec
                 ];
               }

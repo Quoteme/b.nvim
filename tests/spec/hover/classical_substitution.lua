@@ -13,5 +13,5 @@ END
 ]],
   },
   hover = { 7, 19 },
-  shows = { '`PRE P THEN G END`' },
+  shows = { '```b\nPRE P THEN G END\n```', 'inc = PRE count < 10 THEN count := count + 1 END' },
 }

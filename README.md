@@ -222,24 +222,46 @@ it is complete, so `<` waits to see whether `<->` follows. Comments and labels
 keep their spelling. `<localleader>s` or `:ProbSymbol` picks a symbol from a list
 and inserts it.
 
-Hover (`K`) explains what is under the cursor, in B and Event-B:
+Hover (`K`) explains what is under the cursor, in B and Event-B, laid out like
+other language servers: the signature first, then the documentation, an
+example, and a link to the official source.
+
+````
+```eventb
+S ⇸ T
+```
+───
+Partial functions · Typed as `+->`.
+
+A partial function from S to T is a relation that maps an element of S to at
+most one element of T. …
+
+Definition: S ⇸ T ≙ {f | f ∈ S ↔ T ∧ (∀ e,x,y · e ↦ x ∈ f ∧ e ↦ y ∈ f ⇒ x = y)}
+Type: S ⇸ T ∈ ℙ(ℙ(α × β))
+Well-definedness: L(S ⇸ T) ≙ L(S) ∧ L(T)
+
+Example
+```eventb
+{1 ↦ 2} ∈ {1, 3} ⇸ ℕ
+```
+Rodin Handbook, 3.3.5.8 Sets of functions
+````
 
 - **operators and built-in functions** (`∈`, `↦`, `card`, `\/`, `seq`, …) and
-  **classical B keywords** (`PRE`, `INVARIANT`, …): the official text, generated
-  from the operator tables of the
+  **classical B keywords** (`PRE`, `INVARIANT`, …): the text of the
   [Rodin Handbook](https://www3.hhu.de/stups/handbook/rodin/current/html/mathematical_notation.html)
-  (with ASCII input, definition, types and well-definedness condition) and from
-  ProB's [Summary of B Syntax](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax),
-  with a link to the section
-- **Event-B keywords** such as `constants` or `invariants`: a short description
-  with a link to the Rodin Handbook
+  or of ProB's [Summary of B Syntax](https://prob.hhu.de/w/index.php?title=Summary_of_B_Syntax),
+  with the definition, type and well-definedness condition of the hovered
+  operator, and an example
+- **Event-B keywords** such as `constants` or `invariants`: a template of the
+  clause, a short description and an example
 - **identifiers**: carrier sets, constants, variables, after-values (`x'`),
-  parameters, bound variables of quantifiers, events and components, with
-  their type as Rodin's type checker (Event-B) or ProB (classical B) infers it;
-  operations with their parameters, results and the variables they read and
-  write
-- **labels and events** (`@inv1`, `inc`): the formula and its proof
-  obligations with what ProB made of them, as Rodin lists them per element
+  parameters, bound variables, events and components, with their type as
+  Rodin's type checker (Event-B) or ProB (classical B) infers it, and the
+  axioms, invariants or guards that constrain them; operations with their
+  typed parameters and results and the variables they read and write
+- **labels and events** (`@inv1`, `inc`): the formula or the whole event, and
+  its proof obligations with what ProB made of them, as Rodin lists them
 
 Code actions (`vim.lsp.buf.code_action()`, `gra` by default) offer:
 
@@ -377,4 +399,6 @@ The grammars live in `tree-sitter-b/` and `tree-sitter-eventb/`; run
 changing `grammar.js`. The Event-B checks, animation and hover are a patch to
 the language server, `nix/b-language-server/eventb-camille.patch`. The hover
 texts for operators and keywords are generated from the official documentation
-by `python3 nix/b-language-server/hover/generate.py`.
+by `python3 nix/b-language-server/hover/generate.py`; the signatures and
+examples are in `nix/b-language-server/hover/examples.tsv`, and the specs check
+that ProB proves every example.

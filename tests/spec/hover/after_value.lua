@@ -15,5 +15,5 @@ end
 ]],
   },
   hover = { 8, 18 },
-  shows = { "**after-value**", "`n' ∈ ℤ`" },
+  shows = { "(after-value) n' ∈ ℤ", "@act1 n :∣ n' ∈ ℕ" },
 }

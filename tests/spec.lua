@@ -168,7 +168,67 @@ local function animate(spec)
   return errors
 end
 
+--- The examples of the hover documentation in `language` that must be true.
+local function examples(language)
+  local path = vim.fs.dirname(vim.fs.dirname(vim.fs.normalize(root))) .. '/nix/b-language-server/hover/examples.tsv'
+  local result = {}
+  for _, line in ipairs(vim.fn.readfile(path)) do
+    local fields = vim.split(line, '\t', { plain = true })
+    if fields[1] == language and fields[3] == 'pred' then
+      table.insert(result, { title = fields[2], text = fields[4] })
+    end
+  end
+  return result
+end
+
+--- Checks that every Event-B example is a theorem ProB proves, as part of a context.
+local function check_eventb_examples()
+  local lines = { 'context examples', 'axioms' }
+  for i, example in ipairs(examples('eventb')) do
+    table.insert(lines, ('  theorem @ex%d %s'):format(i, example.text))
+  end
+  table.insert(lines, 'end')
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, 'p')
+  vim.fn.writefile(lines, dir .. '/examples.mch')
+  done = false
+  vim.cmd.edit(vim.fn.fnameescape(dir .. '/examples.mch'))
+  await('the language server')
+  local errors = vim.tbl_map(function(d) return 'example: ' .. d.message end, vim.diagnostic.get(0, { severity = { min = vim.diagnostic.severity.WARN } }))
+  vim.fn.setqflist({}, 'r')
+  vim.lsp.buf.code_action({ apply = true, filter = function(a) return (type(a.command) == 'table' and a.command.command or a.command) == 'prob.showPOs' end })
+  vim.wait(120000, function() return #vim.fn.getqflist() > 0 end, 50)
+  local list = examples('eventb')
+  for _, item in ipairs(vim.fn.getqflist()) do
+    if not item.text:find(': discharged', 1, true) then
+      local index = tonumber(item.text:match('^ex(%d+)/'))
+      table.insert(errors, ('%s (%s)'):format(item.text, index and list[index].text or '?'))
+    end
+  end
+  vim.cmd('silent! %bwipeout!')
+  return errors
+end
+
+--- Checks that ProB evaluates every classical B example to TRUE.
+local function check_b_examples()
+  local list = examples('b')
+  local errors = {}
+  for _, example in ipairs(list) do
+    local output = vim.fn.system({ 'probcli', '-repl' }, example.text .. '\n')
+    output = output:gsub('\27%[[0-9;]*m', '')
+    if not output:find('is TRUE') then
+      table.insert(errors, ('%s: %s'):format(example.title, example.text))
+    end
+  end
+  return errors
+end
+
 local function run(spec)
+  if spec.examples == 'eventb' then
+    return check_eventb_examples()
+  elseif spec.examples == 'b' then
+    return check_b_examples()
+  end
   if spec.typed then
     local text = require('prob.keyboard').translate(spec.typed)
     return text == spec.text and {} or { ('typed %q, got %q, expected %q'):format(spec.typed, text, spec.text) }
