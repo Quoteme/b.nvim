@@ -174,16 +174,28 @@ Write Event-B machines and contexts in Camille notation, the textual syntax of
 Rodin's Camille editor, one component per `.mch` file named after the
 component:
 
+`Bank_ctx.mch`:
+
+```B
+context Bank_ctx
+sets PERSONS
+axioms
+  @axm1 finite(PERSONS)
+end
 ```
-context Bank_ctx                  machine Bank sees Bank_ctx
-sets PERSONS                      variables clients
-axioms                            invariants
-  @axm1 finite(PERSONS)             @inv1 clients ⊆ PERSONS
-end                               events
-                                    event INITIALISATION
-                                      then @act1 clients ≔ ∅
-                                    end
-                                  end
+
+`Bank.mch`:
+
+```B
+machine Bank sees Bank_ctx
+variables clients
+invariants
+  @inv1 clients ⊆ PERSONS
+events
+  event INITIALISATION
+    then @act1 clients ≔ ∅
+  end
+end
 ```
 
 Classical B and Event-B share `.mch`, so the plugin looks at the first word:
@@ -251,7 +263,7 @@ change.
 2. Start the animation with **`<localleader>a`**, `:ProbAnimate`, or the code
    action **ProB: animate**. A panel opens on the right:
 
-   ```
+   ```text
     ◆ ProB · Bank   step 3
 
     EVENTS
