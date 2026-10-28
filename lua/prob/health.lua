@@ -22,6 +22,30 @@ function M.check()
     )
   end
 
+  -- A running server older than the plugin lacks hover and the animator.
+  for _, client in ipairs(vim.lsp.get_clients({ name = 'prob' })) do
+    local caps = client.server_capabilities or {}
+    local commands = vim.tbl_get(caps, 'executeCommandProvider', 'commands') or {}
+    local missing = {}
+    if not caps.hoverProvider then
+      table.insert(missing, 'hover')
+    end
+    if not vim.tbl_contains(commands, 'prob.animate') then
+      table.insert(missing, 'animation')
+    end
+    if #missing == 0 then
+      health.ok(('Running language server (client %d) supports hover and animation'):format(client.id))
+    else
+      health.error(
+        ('Running language server (client %d) is older than the plugin: no %s'):format(client.id, table.concat(missing, ', ')),
+        {
+          ('It was started as `%s` from %s'):format(cmd, vim.fn.exepath(cmd)),
+          'Update the b.nvim flake input that provides it (e.g. `nix flake update`) and restart Neovim',
+        }
+      )
+    end
+  end
+
   if vim.fn.executable(vim.g.prob_parser or 'probcli') == 1 then
     health.ok('probcli found: ' .. vim.fn.exepath(vim.g.prob_parser or 'probcli'))
   elseif not prob.has_server() then

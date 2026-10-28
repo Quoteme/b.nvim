@@ -308,10 +308,10 @@ index 43c4789..657ba51 100644
 +}
 diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
 new file mode 100644
-index 0000000..44f5715
+index 0000000..2ba0deb
 --- /dev/null
 +++ b/src/main/kotlin/b/language/server/proBMangement/prob/Animation.kt
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,324 @@
 +package b.language.server.proBMangement.prob
 +
 +import b.language.server.communication.CommunicatorInterface
@@ -458,11 +458,14 @@ index 0000000..44f5715
 +        val previous = trace.previousState
 +        val machine = stateSpace.loadedMachine
 +        val sources = Sources(file!!, project)
++        // ProB reports no constants for a context loaded on its own, so Event-B names come from the checked model.
++        val constantNames = sources.constants() ?: machine.constantNames
++        val variableNames = sources.variables() ?: machine.variableNames
 +
 +        val elements = trace.elements
 +        val position = trace.currentElements.size - 1
 +        val history = elements.drop(1).mapIndexed { index, element ->
-+            mapOf("label" to label(element.transition), "index" to index + 1, "future" to (index + 1 > position))
++            mapOf("label" to label(element.transition, sources.isContext), "index" to index + 1, "future" to (index + 1 > position))
 +        }
 +
 +        fun values(names : List<String>, ready : Boolean, kind : String) = names.map { name ->
@@ -471,13 +474,13 @@ index 0000000..44f5715
 +            mapOf("name" to name, "value" to value, "changed" to (value != before)) + location(sources.declaration(name, kind))
 +        }
 +
-+        val enabled = trace.getNextTransitions(true, FormulaExpand.TRUNCATE).sortedBy { label(it) }.map { transition ->
++        val enabled = trace.getNextTransitions(true, FormulaExpand.TRUNCATE).sortedBy { label(it, sources.isContext) }.map { transition ->
 +            mapOf(
 +                "id" to transition.id,
-+                "name" to display(transition.name),
++                "name" to display(transition.name, sources.isContext),
 +                "event" to transition.name,
-+                "parameters" to parameters(transition, machine),
-+            ) + location(sources.event(display(transition.name)))
++                "parameters" to parameters(transition, constantNames, variableNames, sources.isContext),
++            ) + location(sources.event(display(transition.name, sources.isContext)))
 +        }
 +        val enabledNames = enabled.map { it["event"] }.toSet()
 +        val disabled = if (!state.isInitialised) emptyList() else machine.operationNames.filter { it !in enabledNames && it != INITIALISATION }.sorted().map { name ->
@@ -487,7 +490,8 @@ index 0000000..44f5715
 +        }
 +
 +        val invariants = if (!state.isInitialised) emptyList() else {
-+            val labelled = sources.invariants()
++            // A context has no invariants; its axioms hold for the chosen constants.
++            val labelled = if (sources.isContext) sources.axioms() else sources.invariants()
 +            if (labelled.isEmpty()) listOf(mapOf("label" to "INVARIANT", "ok" to state.isInvariantOk) + location(sources.declaration("INVARIANT", "clause")))
 +            else labelled.map { (label, formula, at) -> mapOf("label" to label, "ok" to holds(state, formula)) + location(at) }
 +        }
@@ -499,14 +503,16 @@ index 0000000..44f5715
 +            "history" to history,
 +            "canBack" to trace.canGoBack(),
 +            "canForward" to trace.canGoForward(),
-+            "constantsSetUp" to state.isConstantsSetUp,
 +            "initialised" to state.isInitialised,
-+            "constants" to values(machine.constantNames, state.isConstantsSetUp, "constants"),
-+            "variables" to values(machine.variableNames, state.isInitialised, "variables"),
++            // A context's constants are set up by its only step.
++            "constantsSetUp" to (if (sources.isContext) state.isInitialised else state.isConstantsSetUp),
++            "constants" to values(constantNames, if (sources.isContext) state.isInitialised else state.isConstantsSetUp, "constants"),
++            "variables" to values(variableNames, state.isInitialised, "variables"),
 +            "invariants" to invariants,
 +            "enabled" to enabled,
 +            "disabled" to disabled,
-+            "deadlock" to (state.isInitialised && enabled.isEmpty()),
++            "deadlock" to (state.isInitialised && enabled.isEmpty() && !sources.isContext),
++            "context" to sources.isContext,
 +            "errors" to state.stateErrors.map { "${it.event}: ${it.shortDescription}" },
 +            "message" to message,
 +        )
@@ -528,10 +534,10 @@ index 0000000..44f5715
 +    }
 +
 +    /** The parameters of [transition]; for the setup and initialisation, the values they choose. */
-+    private fun parameters(transition : Transition, machine : de.prob.statespace.LoadedMachine) : String {
++    private fun parameters(transition : Transition, constants : List<String>, variables : List<String>, context : Boolean) : String {
 +        val chosen = when (transition.name) {
-+            "\$setup_constants" -> machine.constantNames
-+            "\$initialise_machine" -> machine.variableNames
++            "\$setup_constants" -> constants
++            "\$initialise_machine" -> if (context) constants else variables
 +            else -> null
 +        }
 +        if (chosen != null) {
@@ -543,15 +549,16 @@ index 0000000..44f5715
 +        else values.joinToString(", ")
 +    }
 +
-+    private fun label(transition : Transition?) : String {
++    private fun label(transition : Transition?, context : Boolean) : String {
 +        if (transition == null) return ""
 +        val parameters = transition.parameterValues
-+        return display(transition.name) + if (parameters.isEmpty()) "" else "(${parameters.joinToString(", ")})"
++        return display(transition.name, context) + if (parameters.isEmpty()) "" else "(${parameters.joinToString(", ")})"
 +    }
 +
-+    private fun display(name : String) = when (name) {
++    /** ProB sets up the constants of a context on its own with its initialisation. */
++    private fun display(name : String, context : Boolean) = when (name) {
 +        "\$setup_constants" -> "SETUP_CONSTANTS"
-+        "\$initialise_machine" -> INITIALISATION
++        "\$initialise_machine" -> if (context) "SETUP_CONSTANTS" else INITIALISATION
 +        else -> name
 +    }
 +
@@ -560,7 +567,22 @@ index 0000000..44f5715
 +        private val machine = project?.mainInfo as? MachineInfo
 +        private val lines by lazy { file.readLines() }
 +
-+        val name : String = machine?.name ?: (project?.mainInfo as? ContextInfo)?.name ?: file.nameWithoutExtension
++        private val context = project?.mainInfo as? ContextInfo
++
++        val name : String = machine?.name ?: context?.name ?: file.nameWithoutExtension
++
++        val isContext = context != null
++
++        private fun contexts() : List<ContextInfo>? = machine?.contexts ?: context?.closure()?.toList()
++
++        fun constants() : List<String>? = contexts()?.flatMap { it.constants }
++
++        fun variables() : List<String>? = if (project == null) null else machine?.allVariables?.toList().orEmpty()
++
++        fun axioms() : List<Triple<String, String, Location>> =
++            contexts().orEmpty().flatMap { c ->
++                c.axioms.filter { !it.theorem }.map { Triple(it.label, it.formula.toString(), Location(c.component.file, it.token.line - 1, it.token.pos - 1)) }
++            }
 +
 +        fun event(name : String) : Location? {
 +            machine?.let { m -> m.events[name]?.let { return Location(m.component.file, it.token.line - 1, it.token.pos - 1) } }

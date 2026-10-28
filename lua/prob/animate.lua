@@ -160,7 +160,7 @@ local function render_lines(view)
   values('CONSTANTS', view.constantsSetUp and view.constants or {})
 
   if #(view.invariants or {}) > 0 then
-    section('INVARIANTS')
+    section(view.context and 'AXIOMS' or 'INVARIANTS')
     local l = put(line(), '  ')
     for _, inv in ipairs(view.invariants) do
       local mark = inv.ok == true and '✓' or (inv.ok == false and '✗' or '?')
@@ -484,6 +484,14 @@ function M.start(bufnr)
   local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'prob' })[1]
   if not client then
     vim.notify('prob: the B language server is not attached to this buffer', vim.log.levels.ERROR)
+    return
+  end
+  local commands = vim.tbl_get(client.server_capabilities, 'executeCommandProvider', 'commands') or {}
+  if not vim.tbl_contains(commands, 'prob.animate') then
+    vim.notify(
+      'prob: this b-language-server cannot animate; it is older than the plugin. Update it (see :checkhealth prob).',
+      vim.log.levels.ERROR
+    )
     return
   end
   if vim.bo[bufnr].modified then
