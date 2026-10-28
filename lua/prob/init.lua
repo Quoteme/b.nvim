@@ -29,6 +29,13 @@ M.config = {
     animate = '<localleader>a',
     symbol = '<localleader>s',
   },
+  -- Graphs and the graphical animation of the animation panel, as in ProB Tcl/Tk.
+  visualization = {
+    -- Format Graphviz renders graphs to: svg, pdf, png, …
+    format = 'svg',
+    -- function(path) opening a rendered file; nil uses vim.ui.open.
+    open = nil,
+  },
 }
 
 local function show_message(err, result, ctx)

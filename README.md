@@ -45,6 +45,7 @@ Not supported:
 | `b-language-server` | Neovim diagnostics | `b-nvim.packages.<system>.b-language-server` |
 | Java 17+ | the language server and ProB's B parser | included in `b-language-server` |
 | [`probcli`](https://prob.hhu.de/w/index.php/Download) | Vim, and Neovim without the language server | `b-nvim.packages.<system>.prob` |
+| [Graphviz](https://graphviz.org/) (`dot`) | graphs of the animated state | included in `b-language-server` |
 | tree-sitter CLI and a C compiler | building the parser outside Nix | |
 
 Without `b-language-server`, Neovim falls back to the `probcli` quickfix
@@ -327,6 +328,8 @@ invariant.
 | `r` | execute random events (`10r` for ten) |
 | `f` | find a state satisfying a predicate |
 | `m` | model check from the current state and jump to a counterexample |
+| `v` | show a visualisation of the state: a graph or a table |
+| `I` | open the graphical animation with its images |
 | `gd` | show the source of the item under the cursor |
 | `R` | restart, e.g. after changing the model |
 | `q` | stop the animation and close the panel |
@@ -334,6 +337,41 @@ invariant.
 
 Disabled events are marked `○`, with the guards that are false for events
 without parameters. `⚠ deadlock` means no event is enabled.
+
+#### Visualisations
+
+The panel also shows what ProB Tcl/Tk draws in its own windows. Everything
+appears as text first; pressing `⏎` on a `⧉` line opens a picture of it with
+your system's viewer (`vim.ui.open`).
+
+- **GRAPHICS**: the
+  [graphical animation](https://prob.hhu.de/w/index.php?title=Graphical_Visualization)
+  of a classical B machine whose `DEFINITIONS` declare `ANIMATION_FUNCTION`
+  (with `ANIMATION_FUNCTION_DEFAULT`, `ANIMATION_IMGn` and `ANIMATION_STRn`).
+  The grid is drawn with the strings, and each image by its file name;
+  **`⧉ show with images`** (or `I`) opens an HTML page with the images that
+  follows the animation as you step.
+
+  ```text
+   GRAPHICS
+     sm_empty_box sm_1 sm_empty_box
+     ⧉ show with images
+  ```
+
+- **VISUALIZE**: the entries of ProB Tcl/Tk's *Visualize* menu that apply
+  to the current state; `⏎` on the section heading expands it, or `v` picks
+  one. Graphs (`⧉`: state space, current state as a graph, an expression as a
+  graph, machine hierarchy, …) are rendered by Graphviz and opened in your
+  viewer. Tables (`▤`: an expression as a table, coverage, read/write
+  matrix, …) open as text in a split below the model. Entries that need a
+  formula ask for it, e.g. `{n |-> 2}`.
+
+- **VisB**: a machine whose `DEFINITIONS` name a
+  [VisB](https://prob.hhu.de/w/index.php?title=VisB) file with
+  `VISB_JSON_FILE == "lamp.json"` gets a **`⧉ show VisB`** line under
+  GRAPHICS: ProB exports the SVG for the current state as an HTML page that
+  follows the animation. VisB's tables (items, events) appear under
+  VISUALIZE.
 
 ### Key mappings
 
@@ -370,6 +408,10 @@ require('prob').setup({
   treesitter = true, -- false keeps the regex syntax
   keyboard = true, -- false keeps ASCII combinations as typed in Event-B
   keys = { group = '<localleader>', animate = '<localleader>a', symbol = '<localleader>s' }, -- false disables one
+  visualization = {
+    format = 'svg', -- what Graphviz renders graphs to: svg, pdf, png, …
+    open = nil, -- function(path) to open a rendered file; default vim.ui.open
+  },
 })
 ```
 

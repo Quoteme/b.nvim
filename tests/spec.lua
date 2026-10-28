@@ -69,6 +69,8 @@ local function compare(expected, actual)
 end
 
 local animation = require('prob.animate')
+-- Rendered graphs are checked, not opened in a viewer.
+require('prob').config.visualization.open = function() end
 
 --- Sends one animation request and waits for the new view.
 local function animation_step(action, argument, count)
@@ -160,6 +162,40 @@ local function animate(spec)
   end
   if spec.history then
     check('history', spec.history, vim.tbl_map(function(h) return h.label end, vim.tbl_filter(function(h) return not h.future end, view.history or {})))
+  end
+  if spec.graphics then
+    local rows = vim.tbl_map(function(row)
+      return table.concat(vim.tbl_map(function(cell) return cell.text end, row), ' ')
+    end, view.graphics or {})
+    check('graphics', spec.graphics, rows)
+  end
+  if spec.visb ~= nil then
+    check('visb', spec.visb, view.visb)
+  end
+  if spec.images ~= nil then
+    local images = false
+    for _, row in ipairs(view.graphics or {}) do
+      for _, cell in ipairs(row) do
+        images = images or cell.image ~= nil
+      end
+    end
+    check('images', spec.images, images)
+  end
+  for _, v in ipairs(spec.visualize or {}) do
+    local before = animation.last_visualization()
+    animation.action('visualize', v[1], v[2], v[3])
+    vim.wait(120000, function() return not animation.busy() and (animation.last_visualization() ~= before or (animation.view().message or '') ~= '') end, 50)
+    local result = animation.last_visualization()
+    if result == before then
+      table.insert(errors, ('%s: %s'):format(v[2], animation.view().message or 'no result'))
+    elseif v.contains then
+      local text = table.concat(vim.fn.readfile(result.path or ''), '\n')
+      if not text:find(v.contains, 1, true) then
+        table.insert(errors, ('%s: no %q in %s'):format(v[2] or v[1], v.contains, result.path or '?'))
+      end
+    else
+      check(v[2], { v.header, v.rows }, { result.header, result.rows })
+    end
   end
   if spec.message and not (view.message or ''):find(spec.message, 1, true) then
     table.insert(errors, ('message: expected %q in %q'):format(spec.message, view.message or ''))

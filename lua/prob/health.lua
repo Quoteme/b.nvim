@@ -33,8 +33,11 @@ function M.check()
     if not vim.tbl_contains(commands, 'prob.animate') then
       table.insert(missing, 'animation')
     end
+    if not vim.tbl_contains(commands, 'prob.visualize') then
+      table.insert(missing, 'visualisations')
+    end
     if #missing == 0 then
-      health.ok(('Running language server (client %d) supports hover and animation'):format(client.id))
+      health.ok(('Running language server (client %d) supports hover, animation and visualisations'):format(client.id))
     else
       health.error(
         ('Running language server (client %d) is older than the plugin: no %s'):format(client.id, table.concat(missing, ', ')),
@@ -50,6 +53,13 @@ function M.check()
     health.ok('probcli found: ' .. vim.fn.exepath(vim.g.prob_parser or 'probcli'))
   elseif not prob.has_server() then
     health.error('Neither the language server nor probcli is available')
+  end
+
+  -- ProB Tcl/Tk and probcli call `dot` for their graphs; the Nix language server brings its own.
+  if vim.fn.executable('dot') == 1 then
+    health.ok('Graphviz found: ' .. vim.fn.exepath('dot'))
+  else
+    health.info('Graphviz `dot` not on Neovim\'s PATH: the language server needs it for graphs (the Nix package includes it)')
   end
 
   for _, lang in ipairs({ 'b', 'eventb' }) do

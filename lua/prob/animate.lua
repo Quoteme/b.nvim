@@ -16,6 +16,8 @@ local panel_ns = vim.api.nvim_create_namespace('prob_animation_panel')
 ---@field busy boolean
 ---@field stale boolean the model was saved since the animation started
 ---@field help boolean
+---@field expanded boolean the VISUALIZE section lists its entries
+---@field last? table result of the last visualisation
 local session
 
 local highlights = {
@@ -35,6 +37,8 @@ local highlights = {
   ProbAnimMessage = 'WarningMsg',
   ProbAnimHelp = 'Comment',
   ProbAnimKey = 'Special',
+  ProbAnimCell = 'Normal',
+  ProbAnimOpen = 'Underlined',
 }
 for group, link in pairs(highlights) do
   vim.api.nvim_set_hl(0, group, { link = link, default = true })
@@ -48,6 +52,8 @@ local keys = {
   { 'r', 'execute [count] random events' },
   { 'f', 'find a state satisfying a predicate' },
   { 'm', 'model check from here; jump to a counterexample' },
+  { 'v', 'show a visualisation of the state (graph, table)' },
+  { 'I', 'open the graphical animation with its images, or VisB' },
   { 'gd', 'show the source of the item' },
   { 'R', 'restart the animation' },
   { 'q', 'stop the animation' },
@@ -77,6 +83,11 @@ end
 
 local function pad(text, width)
   return text .. string.rep(' ', math.max(1, width - vim.fn.strdisplaywidth(text)))
+end
+
+--- The name of a visualisation, without the "..." of ProB Tcl/Tk's menu entries.
+local function label(v)
+  return (v.name:gsub('%.%.%.$', ''))
 end
 
 local function render_lines(view)
@@ -176,6 +187,52 @@ local function render_lines(view)
   end
   for _, e in ipairs(view.errors or {}) do
     add(put(line(), '   ⚠ ' .. e, 'ProbAnimFail'))
+  end
+
+  -- ANIMATION_FUNCTION, drawn as text; its images and VisB open in a viewer.
+  if (view.graphics and #view.graphics > 0) or view.visb then
+    section('GRAPHICS')
+  end
+  if view.graphics and #view.graphics > 0 then
+    local widths, images = {}, false
+    for _, row in ipairs(view.graphics) do
+      for c, cell in ipairs(row) do
+        widths[c] = math.max(widths[c] or 1, vim.fn.strdisplaywidth(cell.text or ''))
+        images = images or cell.image ~= nil
+      end
+    end
+    for _, row in ipairs(view.graphics) do
+      local l = put(line({ kind = 'graphics' }), '   ')
+      for c, cell in ipairs(row) do
+        local text = c < #row and pad(cell.text or '', widths[c] + 1) or (cell.text or '')
+        put(l, text, cell.image and 'ProbAnimValue' or 'ProbAnimCell')
+      end
+      add(l)
+    end
+    if images then
+      add(put(line({ kind = 'graphics' }), '   ⧉ show with images', 'ProbAnimOpen'))
+    end
+  end
+  if view.visb then
+    add(put(line({ kind = 'visb' }), '   ⧉ show VisB', 'ProbAnimOpen'))
+  end
+
+  -- The Visualize menu of ProB Tcl/Tk: graphs open in a viewer, tables in a split.
+  local available = vim.tbl_filter(function(v)
+    return v.available
+  end, view.visualizations or {})
+  if #available > 0 then
+    add(line())
+    local l = put(line({ kind = 'visualizations' }), ' VISUALIZE', 'ProbAnimSection')
+    put(l, session.expanded and '' or (' ▸ %d · ⏎ expands'):format(#available), 'ProbAnimHelp')
+    add(l)
+    if session.expanded then
+      for _, v in ipairs(available) do
+        local entry = put(line(vim.tbl_extend('force', v, { kind = 'visualization' })), v.kind == 'table' and '   ▤ ' or '   ⧉ ', 'ProbAnimOpen')
+        put(entry, label(v), nil)
+        add(entry)
+      end
+    end
   end
 
   if #(view.history or {}) > 0 then
@@ -281,6 +338,60 @@ local function render()
   annotate(session.view)
 end
 
+--- Shows a table visualisation in a split below the model.
+local function show_table(result)
+  local rows = { result.header or {} }
+  vim.list_extend(rows, result.rows or {})
+  local widths = {}
+  for _, row in ipairs(rows) do
+    for c, cell in ipairs(row) do
+      widths[c] = math.max(widths[c] or 0, vim.fn.strdisplaywidth(cell))
+    end
+  end
+  local lines = {}
+  for r, row in ipairs(rows) do
+    local cells = {}
+    for c, cell in ipairs(row) do
+      cells[c] = c < #row and pad(cell, widths[c] + 2) or cell
+    end
+    table.insert(lines, table.concat(cells))
+    if r == 1 then
+      local rule = {}
+      for c, w in ipairs(widths) do
+        rule[c] = string.rep('─', w) .. (c < #widths and '  ' or '')
+      end
+      table.insert(lines, table.concat(rule))
+    end
+  end
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = 'wipe'
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = 'probtable'
+  pcall(vim.api.nvim_buf_set_name, buf, 'ProB: ' .. (result.title or 'table'))
+  vim.api.nvim_buf_set_extmark(buf, panel_ns, 0, 0, { end_row = 1, hl_group = 'ProbAnimSection', hl_eol = true })
+  local source = vim.fn.bufwinid(session and session.source or -1)
+  if source ~= -1 then
+    vim.api.nvim_set_current_win(source)
+  end
+  vim.cmd(('belowright %dsplit'):format(math.min(#lines, 15)))
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.wo.wrap = false
+  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = buf, nowait = true, desc = 'ProB: close table' })
+end
+
+--- Opens a file ProB rendered, with `visualization.open` or the system's viewer.
+local function open_file(path)
+  local open = require('prob').config.visualization.open
+  if open then
+    return open(path)
+  end
+  local _, err = vim.ui.open(path)
+  if err then
+    vim.notify(('prob: cannot open %s: %s'):format(path, err), vim.log.levels.ERROR)
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- Talking to the server
 
@@ -312,6 +423,63 @@ local function request(action, argument, count)
     end
     render()
   end, session.source)
+end
+
+--- Asks the server for a visualisation of the current state and shows it.
+---@param kind 'graphics'|'visb'|'dot'|'table'
+local function visualize(kind, command, formulas)
+  if not session or session.busy then
+    return
+  end
+  local commands = vim.tbl_get(session.client.server_capabilities, 'executeCommandProvider', 'commands') or {}
+  if not vim.tbl_contains(commands, 'prob.visualize') then
+    vim.notify('prob: this b-language-server cannot visualise; update it (see :checkhealth prob)', vim.log.levels.ERROR)
+    return
+  end
+  session.busy = true
+  render()
+  local args = {
+    kind = kind,
+    command = command or '',
+    formulas = formulas or {},
+    format = require('prob').config.visualization.format,
+  }
+  session.client:request('workspace/executeCommand', { command = 'prob.visualize', arguments = { args } }, function(err, result)
+    if not session then
+      return
+    end
+    session.busy = false
+    local problem = err and err.message or (result and result.error)
+    session.view = vim.tbl_extend('force', session.view or {}, { message = problem or '' })
+    render()
+    if problem or not result then
+      return
+    end
+    session.last = result
+    if result.path then
+      open_file(result.path)
+    elseif result.header then
+      show_table(result)
+    end
+  end, session.source)
+end
+
+--- Asks for the formulas `v` takes, one after another, then shows it.
+local function run_visualization(v)
+  local formulas = {}
+  local function ask()
+    if #formulas >= (v.arity or 0) then
+      return visualize(v.kind, v.command, formulas)
+    end
+    local prompt = v.arity > 1 and ('%s (formula %d of %d): '):format(label(v), #formulas + 1, v.arity) or (label(v) .. ': ')
+    vim.ui.input({ prompt = prompt }, function(formula)
+      if formula and formula ~= '' then
+        table.insert(formulas, formula)
+        ask()
+      end
+    end)
+  end
+  ask()
 end
 
 local function item_under_cursor()
@@ -372,6 +540,13 @@ local actions = {
       request('execute', item.id)
     elseif item.kind == 'history' then
       request('goto', tostring(item.index))
+    elseif item.kind == 'graphics' or item.kind == 'visb' then
+      visualize(item.kind)
+    elseif item.kind == 'visualizations' then
+      session.expanded = not session.expanded
+      render()
+    elseif item.kind == 'visualization' then
+      run_visualization(item)
     else
       show_source(item)
     end
@@ -403,6 +578,29 @@ local actions = {
   end,
   check = function()
     request('modelCheck')
+  end,
+  visualize = function()
+    local item = item_under_cursor()
+    if item and item.kind == 'visualization' then
+      return run_visualization(item)
+    end
+    local entries = vim.tbl_filter(function(v)
+      return v.available
+    end, session.view and session.view.visualizations or {})
+    vim.ui.select(entries, {
+      prompt = 'Visualise',
+      format_item = function(v)
+        return label(v) .. (v.arity > 0 and ' …' or '')
+      end,
+    }, function(v)
+      if v then
+        run_visualization(v)
+      end
+    end)
+  end,
+  graphics = function()
+    local view = session.view or {}
+    visualize((view.graphics == nil or #view.graphics == 0) and view.visb and 'visb' or 'graphics')
   end,
   source = function()
     show_source(item_under_cursor())
@@ -455,6 +653,8 @@ local function open_panel()
   map('r', 'random', 'random steps')
   map('f', 'find', 'find state')
   map('m', 'check', 'model check')
+  map('v', 'visualize', 'visualise the state')
+  map('I', 'graphics', 'open the graphical animation')
   map('gd', 'source', 'show source')
   map('R', 'restart', 'restart animation')
   map('?', 'help', 'toggle help')
@@ -498,7 +698,7 @@ function M.start(bufnr)
     vim.notify('prob: ProB animates the file on disk; save it first', vim.log.levels.WARN)
   end
 
-  session = { client = client, source = bufnr, items = {}, busy = false, stale = false, help = false }
+  session = { client = client, source = bufnr, items = {}, busy = false, stale = false, help = false, expanded = false }
   session.buf, session.win = open_panel()
   vim.api.nvim_create_autocmd('BufWritePost', {
     group = vim.api.nvim_create_augroup('prob_animation', { clear = true }),
@@ -540,11 +740,18 @@ function M.busy()
   return session ~= nil and session.busy
 end
 
+--- The result of the last visualisation, for tests.
+function M.last_visualization()
+  return session and session.last
+end
+
 --- Runs an action as if its key had been pressed in the panel.
----@param action string execute|with|back|forward|random|find|check|restart
+---@param action string execute|with|back|forward|random|find|check|visualize|graphics|restart
 function M.action(action, ...)
   if action == 'request' then
     return request(...)
+  elseif action == 'visualize' and select('#', ...) > 0 then
+    return visualize(...)
   end
   return actions[action]()
 end
