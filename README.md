@@ -2,6 +2,8 @@
 
 > [!CAUTION]
 > **Some parts of this project were vibe coded!** Proceed with caution!
+> Specifically, tedious tasks such as scraping the official documentation for
+> the hover texts and generating the tree-sitter parsers were automated.
 
 <p>
   <a href="https://prob.hhu.de/"><img src="https://prob.hhu.de/w/skins/prob/resources/img/prob_logo.svg" alt="ProB" height="64"></a>
