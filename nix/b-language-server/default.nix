@@ -47,6 +47,9 @@ stdenv.mkDerivation (finalAttrs: {
     # Rodin: static checks, proof obligations discharged with ProB, model
     # checking and animation as code actions, and hover documentation.
     ./eventb-camille.patch
+    # Proves Event-B proof obligations interactively, like Rodin's Proving
+    # perspective, with Rodin's tactics; proofs are kept in Rodin's .bpr files.
+    ./eventb-proving.patch
   ];
 
   # Hover documentation generated from the Rodin Handbook and ProB's

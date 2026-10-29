@@ -1,0 +1,2185 @@
+diff --git a/src/main/kotlin/b/language/server/BDocumentService.kt b/src/main/kotlin/b/language/server/BDocumentService.kt
+index 657cce9..abaa4f9 100644
+--- a/src/main/kotlin/b/language/server/BDocumentService.kt
++++ b/src/main/kotlin/b/language/server/BDocumentService.kt
+@@ -7,6 +7,8 @@ import b.language.server.proBMangement.prob.CouldNotFindProBHomeException
+ import com.google.gson.JsonObject
+ import com.google.gson.JsonPrimitive
+ import b.language.server.proBMangement.prob.Animation
++import b.language.server.proBMangement.prob.ProofObligation
++import b.language.server.proBMangement.prob.ProofSession
+ import b.language.server.proBMangement.prob.Hover as HoverText
+ import org.eclipse.lsp4j.jsonrpc.messages.Either
+ import java.util.concurrent.CompletableFuture
+@@ -24,6 +26,7 @@ class BDocumentService(private val server: ServerInterface,
+     private val issueTracker : ConcurrentHashMap<String, Set<String>> = ConcurrentHashMap()
+     private val published : ConcurrentHashMap<String, Map<String, List<Diagnostic>>> = ConcurrentHashMap()
+     private val animation by lazy { Animation(communicator) }
++    private val proving by lazy { ProofSession(communicator) }
+ 
+     companion object {
+         const val MODEL_CHECK = "prob.modelCheck"
+@@ -34,7 +37,11 @@ class BDocumentService(private val server: ServerInterface,
+         const val OPEN_ANIMATION = "prob.animate.open"
+         /** Shows a visualisation of the animation's current state, as ProB Tcl/Tk does. */
+         const val VISUALIZE = "prob.visualize"
+-        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS, ANIMATE, VISUALIZE)
++        /** Interactive proof of an obligation, as in Rodin's Proving perspective. */
++        const val PROVE = "prob.prove"
++        /** Handled by the client, which opens its proving panel and then sends [PROVE]. */
++        const val OPEN_PROVE = "prob.prove.open"
++        val COMMANDS = listOf(MODEL_CHECK, DISCHARGE_POS, SHOW_POS, ANIMATE, VISUALIZE, PROVE)
+     }
+ 
+     /**
+@@ -123,6 +130,7 @@ class BDocumentService(private val server: ServerInterface,
+             "ProB: discharge proof obligations with a longer timeout" to DISCHARGE_POS,
+             "ProB: list proof obligations" to SHOW_POS,
+             "ProB: animate" to OPEN_ANIMATION,
++            "ProB: prove interactively" to OPEN_PROVE,
+         ).map { (title, command) -> Either.forLeft<Command, CodeAction>(Command(title, command, listOf(uri))) }
+         return CompletableFuture.completedFuture(actions)
+     }
+@@ -154,6 +162,10 @@ class BDocumentService(private val server: ServerInterface,
+                 }
+             }
+         }
++        if (command == PROVE) {
++            val request = argument as? JsonObject ?: return CompletableFuture.completedFuture(null)
++            return prove(request)
++        }
+         val uri = (argument as? JsonPrimitive)?.asString ?: argument?.toString()?.trim('"')
+             ?: return CompletableFuture.completedFuture(null)
+         val file = File(URI(uri).path)
+@@ -187,6 +199,43 @@ class BDocumentService(private val server: ServerInterface,
+         }
+     }
+ 
++    /** Runs an action of the proving panel; the answer is the panel's view. */
++    private fun prove(request : JsonObject) : CompletableFuture<Any?> {
++        fun field(name : String) = request.get(name)?.takeUnless { it.isJsonNull }
++        val action = field("action")?.asString ?: "view"
++        val file = field("uri")?.asString?.let { File(URI(it).path) }
++        fun obligations(file : File) = synchronized(proBInterface) { proBInterface.proofObligations(file) }
++        return when (action) {
++            "open" -> server.getDocumentSettings(file!!.absolutePath).thenApply { settings ->
++                synchronized(proving) { proving.open(file, obligations(file), field("name")?.asString, settings.poTimeout * 10) }
++            }
++            "at" -> CompletableFuture.supplyAsync { proving.at(file!!, obligations(file), field("line")?.asInt ?: 0) }
++            "close" -> CompletableFuture.supplyAsync { synchronized(proving) { proving.close() }; mapOf("closed" to true) }
++            else -> CompletableFuture.supplyAsync {
++                synchronized(proving) {
++                    val before = proving.obligation?.status
++                    val view = proving.perform(action, field("node")?.asString, field("tactic")?.asString,
++                        field("hyp")?.asInt, field("position")?.asString, field("input")?.asString)
++                    proving.obligation?.takeIf { it.status != before }?.let { refresh(it) }
++                    view
++                }
++            }
++        }
++    }
++
++    /** Replaces the diagnostic of [obligation] after its status changed. */
++    private fun refresh(obligation : ProofObligation) {
++        // Diagnostics are published by the file checked, grouped by the file they are in.
++        val path = obligation.file.toURI().path
++        val byFile = published.entries.firstOrNull { it.key == obligation.file.absolutePath }
++            ?: published.entries.firstOrNull { (_, diagnostics) -> diagnostics.containsKey(path) } ?: return
++        val updated = byFile.value.mapValues { it.value.toMutableList() }.toMutableMap()
++        val diagnostics = updated.getOrPut(path) { mutableListOf() }
++        diagnostics.removeAll { it.message.startsWith(obligation.name + " ") || it.message.startsWith(obligation.name + ":") }
++        obligation.diagnostic()?.let { diagnostics += it }
++        publish(File(byFile.key), updated)
++    }
++
+     /**
+      * Gets all uris that are no longer contain problems
+      * @param file the uri of the current main file
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt
+index 4261e37..5bd1c67 100644
+--- a/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Hover.kt
+@@ -516,16 +516,23 @@ object Hover {
+         val lines = obligations.joinToString("\n") { po ->
+             val mark = when (po.status) {
+                 ProofObligation.Status.DISCHARGED -> "✓"
++                ProofObligation.Status.PROVED -> "✓✎"
++                ProofObligation.Status.REVIEWED -> "≈"
+                 ProofObligation.Status.DISPROVED -> "✗"
+                 ProofObligation.Status.UNDISCHARGED -> "?"
++                ProofObligation.Status.BROKEN -> "⚠"
+             }
+             "- $mark `${po.name}`" + when (po.status) {
+                 ProofObligation.Status.DISPROVED -> " does not hold" + (if (po.detail.isEmpty()) "" else ", e.g. for `${po.detail}`")
+                 ProofObligation.Status.UNDISCHARGED -> " not discharged by ProB"
++                ProofObligation.Status.PROVED -> " proved interactively"
++                ProofObligation.Status.REVIEWED -> " reviewed"
++                ProofObligation.Status.BROKEN -> " has a broken proof"
+                 ProofObligation.Status.DISCHARGED -> ""
+             }
+         }
+-        return "**Proof obligations** ([3.2.7](${POS.first}))\n$lines"
++        val prove = if (obligations.any { !it.closed }) "\n\n`:ProbProve` proves them interactively." else ""
++        return "**Proof obligations** ([3.2.7](${POS.first}))\n$lines$prove"
+     }
+ 
+     // ----------------------------------------------------------------------
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
+index fcc8e9a..967a749 100644
+--- a/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProBKernel.kt
+@@ -11,21 +11,16 @@ import de.prob.animator.domainobjects.ErrorItem
+ import de.prob.exception.ProBError
+ import de.prob.scripting.FactoryProvider
+ import de.be4.eventb.core.parser.node.AMachineParseUnit
+-import de.prob.animator.command.CbcSolveCommand
+ import de.prob.animator.command.FormulaTypecheckCommand
+ import de.prob.animator.command.GetMachineIdentifiersCommand
+-import de.prob.animator.domainobjects.ComputationNotCompletedResult
+ import de.prob.animator.domainobjects.EvalResult
+ import de.prob.animator.domainobjects.EventB
+ import de.prob.animator.domainobjects.FormulaExpand
+ import de.prob.check.ConsistencyChecker
+ import de.prob.check.ModelCheckErrorUncovered
+ import de.prob.check.ModelCheckingOptions
+-import de.prob.model.eventb.Context
+ import de.prob.model.eventb.EventBModel
+-import de.prob.model.representation.ModelElementList
+ import java.time.Duration
+-import de.prob.model.representation.Set as ProBSet
+ import de.prob.statespace.AnimationSelector
+ import de.prob.statespace.StateSpace
+ import org.eclipse.lsp4j.Diagnostic
+@@ -96,10 +91,14 @@ class ProBKernel @Inject constructor(private val injector : Injector,
+         }
+ 
+         val generated = ProofObligationGenerator().generate(project.mainInfo)
+-        communicator.sendDebugMessage("discharging ${generated.size} proof obligations", MessageType.Info)
+-        discharge(project, generated, settings.poTimeout)
++        val broken = replay(file, generated)
++        val open = generated.filter { !it.closed }
++        communicator.sendDebugMessage("discharging ${open.size} proof obligations", MessageType.Info)
++        discharge(project, open, settings.poTimeout)
++        // A broken proof matters only if ProB cannot decide the obligation either.
++        broken.filter { it.status == ProofObligation.Status.UNDISCHARGED }.forEach { it.status = ProofObligation.Status.BROKEN }
+         obligations[file.absolutePath] = generated
+-        return problems + generated.mapNotNull { it.toDiagnostic() }
++        return problems + generated.mapNotNull { it.diagnostic() }
+     }
+ 
+     /** Hover texts for the identifiers of classical B machines, by file and name, from their last check. */
+@@ -180,59 +179,38 @@ class ProBKernel @Inject constructor(private val injector : Injector,
+      */
+     private fun discharge(project : CamilleProject, obligations : List<ProofObligation>, timeout : Int) {
+         if (obligations.isEmpty()) return
+-        val noExtensions = emptySet<org.eventb.core.ast.extension.IFormulaExtension>()
+-        val contexts = when (val info = project.mainInfo) {
+-            is MachineInfo -> info.contexts
+-            is ContextInfo -> info.closure().toList()
+-            else -> emptyList()
+-        }
+-        // The obligations mention constants and variables freely; only the carrier sets must be known.
+-        val sets = Context("proof_obligations").withSets(ModelElementList(contexts.flatMap { it.sets }.distinct().map { ProBSet(EventB(it, noExtensions)) }))
+-        val stateSpace = animator.createStateSpace()
+         try {
+-            stateSpace.changePreferences(mapOf("TIME_OUT" to timeout.toString()))
+-            injector.getInstance(EventBModel::class.java).addContext(sets).loadIntoStateSpace(stateSpace, sets)
+-            for (obligation in obligations) {
+-                solve(stateSpace, obligation, noExtensions)
++            ProBProver(injector, animator, ProBProver.carrierSets(project), timeout).use { prover ->
++                for (obligation in obligations) {
++                    when (val result = prover.solve(obligation.negation)) {
++                        is ProBProver.Result.Proved -> obligation.status = ProofObligation.Status.DISCHARGED
++                        is ProBProver.Result.Counterexample -> {
++                            obligation.status = ProofObligation.Status.DISPROVED
++                            obligation.detail = result.detail
++                        }
++                        is ProBProver.Result.Unknown -> obligation.detail = result.reason
++                    }
++                }
+             }
+         } catch (e : ProBError) {
+             communicator.sendDebugMessage("could not discharge proof obligations: ${e.message}", MessageType.Info)
+-        } finally {
+-            stateSpace.kill()
+         }
+     }
+ 
+-    private fun solve(stateSpace : StateSpace, obligation : ProofObligation, noExtensions : Set<org.eventb.core.ast.extension.IFormulaExtension>) {
+-        for (solver in listOf(CbcSolveCommand.Solvers.PROB, CbcSolveCommand.Solvers.Z3AXM)) {
+-            val result = try {
+-                val command = CbcSolveCommand(EventB(obligation.negation, noExtensions, FormulaExpand.EXPAND), solver)
+-                stateSpace.execute(command)
+-                command.value
+-            } catch (e : ProBError) {
+-                obligation.detail = e.errors.firstOrNull()?.message ?: e.message?.lineSequence()?.firstOrNull().orEmpty()
+-                continue
+-            }
+-            if (result is EvalResult && result.value == "FALSE") {
+-                obligation.status = ProofObligation.Status.DISCHARGED
+-                return
+-            }
+-            if (result is EvalResult && result.value == "TRUE") {
+-                obligation.status = ProofObligation.Status.DISPROVED
+-                obligation.detail = result.solutions.entries.joinToString(", ") { (name, value) ->
+-                    "${name.replace(Regex("$PRIME_SUFFIX$"), "'")} = $value"
+-                }
+-                return
+-            }
+-            obligation.detail = (result as? ComputationNotCompletedResult)?.reason ?: result.toString()
++    /**
++     * Replays the proofs saved in the component's .bpr file, as Rodin does after a change.
++     * @return the obligations whose saved proof no longer applies
++     */
++    private fun replay(file : File, obligations : List<ProofObligation>) : Set<ProofObligation> {
++        val saved = ProofStore(file).load()
++        val broken = mutableSetOf<ProofObligation>()
++        for (obligation in obligations) {
++            val skeleton = saved[obligation.name] ?: continue
++            val tree = ProofTree(obligation)
++            if (!tree.load(skeleton)) broken += obligation
++            obligation.updateStatus(tree)
+         }
+-    }
+-
+-    private fun ProofObligation.toDiagnostic() : Diagnostic? = when (status) {
+-        ProofObligation.Status.DISCHARGED -> null
+-        ProofObligation.Status.DISPROVED ->
+-            diagnostic(file, line, pos, length, if (detail.isEmpty()) "$name does not hold" else "$name does not hold, e.g. for $detail", DiagnosticSeverity.Warning)
+-        ProofObligation.Status.UNDISCHARGED ->
+-            diagnostic(file, line, pos, length, "$name is not discharged by ProB: $detail", DiagnosticSeverity.Hint)
++        return broken
+     }
+ 
+     /**
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProBProver.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProBProver.kt
+new file mode 100644
+index 0000000..9bc5d50
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProBProver.kt
+@@ -0,0 +1,78 @@
++package b.language.server.proBMangement.prob
++
++import com.google.inject.Injector
++import de.prob.animator.ReusableAnimator
++import de.prob.animator.command.CbcSolveCommand
++import de.prob.animator.domainobjects.ComputationNotCompletedResult
++import de.prob.animator.domainobjects.EvalResult
++import de.prob.animator.domainobjects.EventB
++import de.prob.animator.domainobjects.FormulaExpand
++import de.prob.exception.ProBError
++import de.prob.model.eventb.Context
++import de.prob.model.eventb.EventBModel
++import de.prob.model.representation.ModelElementList
++import de.prob.model.representation.Set as ProBSet
++
++/**
++ * ProB's constraint solver as a prover: a sequent holds if the conjunction of its hypotheses and
++ * its negated goal has no solution; a solution is a counterexample.
++ *
++ * The predicates mention constants and variables freely, so only the carrier sets of [sets] are
++ * loaded, as a context of their own.
++ */
++class ProBProver(injector: Injector, animator: ReusableAnimator, sets: Collection<String>, timeout: Int) : AutoCloseable {
++
++    sealed class Result {
++        object Proved : Result()
++        class Counterexample(val detail: String) : Result()
++        class Unknown(val reason: String) : Result()
++    }
++
++    private val noExtensions = emptySet<org.eventb.core.ast.extension.IFormulaExtension>()
++    private val stateSpace = animator.createStateSpace()
++
++    init {
++        try {
++            val context = Context("proof_obligations").withSets(ModelElementList(sets.distinct().map { ProBSet(EventB(it, noExtensions)) }))
++            stateSpace.changePreferences(mapOf("TIME_OUT" to timeout.toString()))
++            injector.getInstance(EventBModel::class.java).addContext(context).loadIntoStateSpace(stateSpace, context)
++        } catch (e: RuntimeException) {
++            stateSpace.kill()
++            throw e
++        }
++    }
++
++    /** Solves [negation] with ProB's solver, then with Z3 if ProB cannot decide. */
++    fun solve(negation: String): Result {
++        var reason = ""
++        for (solver in listOf(CbcSolveCommand.Solvers.PROB, CbcSolveCommand.Solvers.Z3AXM)) {
++            val result = try {
++                val command = CbcSolveCommand(EventB(negation, noExtensions, FormulaExpand.EXPAND), solver)
++                stateSpace.execute(command)
++                command.value
++            } catch (e: ProBError) {
++                reason = e.errors.firstOrNull()?.message ?: e.message?.lineSequence()?.firstOrNull().orEmpty()
++                continue
++            }
++            if (result is EvalResult && result.value == "FALSE") return Result.Proved
++            if (result is EvalResult && result.value == "TRUE") {
++                return Result.Counterexample(result.solutions.entries.joinToString(", ") { (name, value) ->
++                    "${name.replace(Regex("$PRIME_SUFFIX$"), "'")} = $value"
++                })
++            }
++            reason = (result as? ComputationNotCompletedResult)?.reason ?: result.toString()
++        }
++        return Result.Unknown(reason)
++    }
++
++    override fun close() = stateSpace.kill()
++
++    companion object {
++        /** The carrier sets the obligations of [project] may mention. */
++        fun carrierSets(project: CamilleProject): List<String> = when (val info = project.mainInfo) {
++            is MachineInfo -> info.contexts
++            is ContextInfo -> info.closure().toList()
++            else -> emptyList()
++        }.flatMap { it.sets }.distinct()
++    }
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt
+index d30f0fa..8864988 100644
+--- a/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProofObligations.kt
+@@ -1,13 +1,25 @@
+ package b.language.server.proBMangement.prob
+ 
+ import de.be4.eventb.core.parser.node.Token
++import org.eclipse.lsp4j.Diagnostic
++import org.eclipse.lsp4j.DiagnosticSeverity
+ import org.eventb.core.ast.Expression
+ import org.eventb.core.ast.Formula
++import org.eventb.core.ast.FormulaFactory
+ import org.eventb.core.ast.ITypeEnvironment
++import org.eventb.core.ast.ITypeEnvironmentBuilder
+ import org.eventb.core.ast.IntegerType
++import org.eventb.core.ast.Predicate
+ import org.eventb.core.ast.Type
+ import java.io.File
+ 
++/**
++ * A hypothesis of a proof obligation: [origin] is the label of the axiom, invariant, guard,
++ * action or witness it comes from. As in Rodin, the hypotheses local to an event, and those
++ * about the identifiers of the goal, are selected; the others are only searched.
++ */
++class Hypothesis(val predicate: Predicate, val origin: String?, val selected: Boolean)
++
+ /**
+  * A proof obligation as generated by Rodin's proof obligation generator
+  * (Rodin Handbook 3.2.5 to 3.2.7): the goal must follow from the hypotheses.
+@@ -18,31 +30,97 @@ class ProofObligation(
+     val line: Int,
+     val pos: Int,
+     val length: Int,
+-    hypotheses: List<String>,
+-    goal: String,
++    /** The types of the identifiers, including after-values (x') and parameters. */
++    val env: ITypeEnvironment,
++    val hypotheses: List<Hypothesis>,
++    val goal: Predicate,
+ ) {
+     /** A counterexample to this predicate disproves the obligation. */
+-    val negation: String = (hypotheses.map { "($it)" } + "¬($goal)").joinToString(" ∧ ")
++    val negation: String get() = ProBText.negation(env, hypotheses.map { it.predicate }, goal)
+ 
+     var status = Status.UNDISCHARGED
+     var detail = ""
+ 
+-    enum class Status { DISCHARGED, DISPROVED, UNDISCHARGED }
++    enum class Status {
++        /** ProB found no counterexample. */
++        DISCHARGED,
++        /** Proved interactively; the proof is in the component's .bpr file. */
++        PROVED,
++        /** The interactive proof has reviewed steps. */
++        REVIEWED,
++        DISPROVED,
++        UNDISCHARGED,
++        /** The saved proof no longer applies to the obligation. */
++        BROKEN,
++    }
++
++    val closed get() = status == Status.DISCHARGED || status == Status.PROVED || status == Status.REVIEWED
++
++    /**
++     * Takes the status from an interactive proof: a complete proof proves the obligation. An
++     * incomplete one leaves ProB's verdict, if there is one.
++     */
++    fun updateStatus(tree: ProofTree) {
++        status = when {
++            tree.complete -> if (tree.confidence <= Confidence.REVIEWED_MAX) Status.REVIEWED else Status.PROVED
++            status == Status.DISCHARGED || status == Status.DISPROVED -> status
++            tree.root.nodes().any { it.broken != null } -> Status.BROKEN
++            else -> Status.UNDISCHARGED
++        }
++    }
++
++    /** How the obligation shows among the problems of its file, if at all. */
++    fun diagnostic(): Diagnostic? = when (status) {
++        Status.DISCHARGED, Status.PROVED, Status.REVIEWED -> null
++        Status.DISPROVED ->
++            diagnostic(file, line, pos, length, if (detail.isEmpty()) "$name does not hold" else "$name does not hold, e.g. for $detail", DiagnosticSeverity.Warning)
++        Status.UNDISCHARGED ->
++            diagnostic(file, line, pos, length, "$name is not discharged by ProB: $detail", DiagnosticSeverity.Hint)
++        Status.BROKEN ->
++            diagnostic(file, line, pos, length, "$name: its saved proof no longer applies; reprove it with :ProbProve", DiagnosticSeverity.Hint)
++    }
+ }
+ 
+ /** ProB cannot read primed identifiers, so x' becomes x_prime. */
+ const val PRIME_SUFFIX = "_prime"
+ 
++/** Event-B predicates as ProB reads them. */
++object ProBText {
++    private val PRIMED = Regex("([A-Za-z_][A-Za-z0-9_]*)'")
++
++    /** [text] with x' written as x_prime. */
++    fun unprimed(text: String) = text.replace(PRIMED) { it.groupValues[1] + PRIME_SUFFIX }
++
++    /**
++     * The conjunction of the hypotheses and the negated goal, typed: ProB cannot always infer
++     * the types from the predicates alone, as in x' = ∅, so every identifier mentioned gets a
++     * typing predicate, as in Rodin's type environment.
++     */
++    fun negation(env: ITypeEnvironment, hypotheses: List<Predicate>, goal: Predicate): String {
++        val conjuncts = hypotheses.map { unprimed(it.toString()) } + "¬(${unprimed(goal.toString())})"
++        val text = conjuncts.joinToString(" ")
++        val typing = mutableListOf<String>()
++        val iterator = env.iterator
++        while (iterator.hasNext()) {
++            iterator.advance()
++            if (iterator.isGivenSet) continue
++            val name = unprimed(iterator.name)
++            if (Regex("(?<![\\w'])${Regex.escape(name)}(?![\\w'])").containsMatchIn(text)) {
++                typing += "$name ∈ ${iterator.type.toExpression()}"
++            }
++        }
++        return (typing + conjuncts).joinToString(" ∧ ") { "($it)" }
++    }
++}
++
+ /** Generates the proof obligations of a checked context or machine. */
+ class ProofObligationGenerator {
+ 
+     private val obligations = mutableListOf<ProofObligation>()
++    private val factory = FormulaFactory.getDefault()
+ 
+-    /**
+-     * The types of the identifiers in scope. Like Rodin, every obligation carries them as typing
+-     * hypotheses, since ProB cannot always infer them from the predicates alone, as in x' = ∅.
+-     */
+-    private var types : Map<String, Type> = emptyMap()
++    /** The identifiers in scope, with their after-values and the parameters of the current event. */
++    private var env: ITypeEnvironmentBuilder = factory.makeTypeEnvironment()
+ 
+     fun generate(info: Any?): List<ProofObligation> {
+         when (info) {
+@@ -52,95 +130,113 @@ class ProofObligationGenerator {
+         return obligations
+     }
+ 
+-    private fun po(name: String, file: File, token: Token, hypotheses: List<String>, goal: String) {
+-        val text = (hypotheses + goal).joinToString(" ")
+-        val typing = types.filter { (identifier, _) ->
+-            Regex("(?<![\\w'])${Regex.escape(identifier)}(?![\\w'])").containsMatchIn(text)
+-        }.map { (identifier, type) -> "$identifier ∈ ${type.toExpression()}" }
+-        obligations += ProofObligation(name, file, token.line, token.pos, token.text.length, typing + hypotheses, goal)
++    private fun po(name: String, file: File, token: Token, hypotheses: List<Hypothesis>, goal: Predicate) {
++        // Hypotheses about the goal's identifiers, or their after-values, are selected, like
++        // Rodin's selection hints.
++        fun names(p: Predicate) = p.freeIdentifiers.map { it.name.removeSuffix("'") }.toSet()
++        val identifiers = names(goal)
++        val selected = hypotheses.distinctBy { it.predicate }.map { h ->
++            if (h.selected || names(h.predicate).none { it in identifiers }) h
++            else Hypothesis(h.predicate, h.origin, true)
++        }
++        obligations += ProofObligation(name, file, token.line, token.pos, token.text.length, env.makeSnapshot(), selected, goal)
+     }
+ 
+-    /** The types of [env]'s identifiers and of their after-values, without the carrier sets. */
+-    private fun typesOf(env : ITypeEnvironment) : Map<String, Type> {
+-        val result = LinkedHashMap<String, Type>()
+-        val iterator = env.iterator
++    /** [env] with the after-value of every variable. */
++    private fun withPrimes(base: ITypeEnvironment, extra: Map<String, Type> = emptyMap()): ITypeEnvironmentBuilder {
++        val result = base.makeBuilder()
++        val iterator = base.iterator
+         while (iterator.hasNext()) {
+             iterator.advance()
+-            if (iterator.isGivenSet) continue
+-            result[iterator.name] = iterator.type
+-            result[iterator.name + PRIME_SUFFIX] = iterator.type
++            if (!iterator.isGivenSet && !iterator.name.endsWith("'") && !result.contains(iterator.name + "'")) {
++                result.addName(iterator.name + "'", iterator.type)
++            }
+         }
++        extra.forEach { (name, type) -> if (!result.contains(name)) result.addName(name, type) }
+         return result
+     }
+ 
++    /** Parses and type-checks a goal built from text in Rodin's notation. */
++    private fun pred(text: String): Predicate {
++        val result = factory.parsePredicate(text, null)
++        check(!result.hasProblem()) { "cannot parse generated predicate $text: ${result.problems}" }
++        val predicate = result.parsedPredicate
++        val typeCheck = predicate.typeCheck(env)
++        check(!typeCheck.hasProblem()) { "cannot type generated predicate $text: ${typeCheck.problems}" }
++        return predicate
++    }
++
++    private fun local(predicate: Predicate, origin: String?) = Hypothesis(predicate, origin, true)
++    private fun global(predicate: Predicate, origin: String?) = Hypothesis(predicate, origin, false)
++
+     private fun context(info: ContextInfo) {
+         val file = info.component.file
+-        types = typesOf(info.env)
+-        val hypotheses = info.extended.flatMap { it.closure() }.distinct().flatMap { c -> c.axioms.map { prob(it.formula) } }.toMutableList()
++        env = withPrimes(info.env)
++        val hypotheses = info.extended.flatMap { it.closure() }.distinct().flatMap { c -> c.axioms.map { global(it.formula, it.label) } }.toMutableList()
+         for (axiom in info.axioms) {
+             wd(axiom.formula)?.let { po("${axiom.label}/WD", file, axiom.token, hypotheses, it) }
+-            if (axiom.theorem) po("${axiom.label}/THM", file, axiom.token, hypotheses, prob(axiom.formula))
+-            hypotheses += prob(axiom.formula)
++            if (axiom.theorem) po("${axiom.label}/THM", file, axiom.token, hypotheses, axiom.formula)
++            hypotheses += global(axiom.formula, axiom.label)
+         }
+     }
+ 
+     private fun machine(info: MachineInfo) {
+         val file = info.component.file
+-        types = typesOf(info.env)
+-        val axioms = info.contexts.flatMap { c -> c.axioms.map { prob(it.formula) } }
+-        val abstractInvariants = info.abstractInvariants.map { prob(it) }
+-        val invariants = info.invariants.map { prob(it.formula) }
++        env = withPrimes(info.env)
++        val axioms = info.contexts.flatMap { c -> c.axioms.map { global(it.formula, it.label) } }
++        val abstractInvariants = info.abstractInvariants.map { global(it, null) }
++        val invariants = info.invariants.map { global(it.formula, it.label) }
+         val base = axioms + abstractInvariants + invariants
+ 
+         val before = (axioms + abstractInvariants).toMutableList()
+         for (invariant in info.invariants) {
+             wd(invariant.formula)?.let { po("${invariant.label}/WD", file, invariant.token, before, it) }
+-            if (invariant.theorem) po("${invariant.label}/THM", file, invariant.token, before, prob(invariant.formula))
+-            before += prob(invariant.formula)
++            if (invariant.theorem) po("${invariant.label}/THM", file, invariant.token, before, invariant.formula)
++            before += global(invariant.formula, invariant.label)
+         }
+ 
+         info.variant?.let { variant ->
+             wd(variant.formula)?.let { po("VWD", file, variant.token, base, it) }
+             if (variant.formula.type !is IntegerType && info.events.values.any { it.convergence != Convergence.ORDINARY }) {
+-                po("FIN", file, variant.token, base, "finite(${prob(variant.formula)})")
++                po("FIN", file, variant.token, base, pred("finite(${variant.formula})"))
+             }
+         }
+ 
+         for (event in info.events.values) event(info, event, axioms, base)
+     }
+ 
+-    private fun event(info: MachineInfo, event: EventInfo, axioms: List<String>, base: List<String>) {
++    private fun event(info: MachineInfo, event: EventInfo, axioms: List<Hypothesis>, base: List<Hypothesis>) {
+         val file = info.component.file
+-        types = typesOf(info.env) + event.parameters + event.refines.flatMap { it.parameters.entries }.associate { it.key to it.value }
++        env = withPrimes(info.env, event.parameters + event.refines.flatMap { it.parameters.entries }.associate { it.key to it.value })
+         val prefix = event.name
+         val state = if (event.isInitialisation) axioms else base
+ 
+-        val guards = mutableListOf<String>()
++        val guards = mutableListOf<Hypothesis>()
+         for (guard in event.guards) {
+             wd(guard.formula)?.let { po("$prefix/${guard.label}/WD", file, guard.token, state + guards, it) }
+-            if (guard.theorem) po("$prefix/${guard.label}/THM", file, guard.token, state + guards, prob(guard.formula))
+-            guards += prob(guard.formula)
++            if (guard.theorem) po("$prefix/${guard.label}/THM", file, guard.token, state + guards, guard.formula)
++            guards += local(guard.formula, guard.label)
+         }
+ 
+         val enabled = state + guards
+-        val actions = event.actions.map { prob(it.formula.baPredicate) }
++        val actions = event.actions.map { local(it.formula.baPredicate, it.label) }
+         for (action in event.actions) {
+             wd(action.formula)?.let { po("$prefix/${action.label}/WD", file, action.token, enabled, it) }
+             val fis = action.formula.fisPredicate
+-            if (fis.tag != Formula.BTRUE) po("$prefix/${action.label}/FIS", file, action.token, enabled, prob(fis))
++            if (fis.tag != Formula.BTRUE) po("$prefix/${action.label}/FIS", file, action.token, enabled, fis)
+         }
+ 
+         val abstract = info.abstract
+         val abstractVariables = abstract?.variables.orEmpty().toSet()
+         val disappearing = abstractVariables - info.variables.toSet()
+-        val parameterWitnesses = event.witnesses.filter { !it.label.endsWith("'") }.map { prob(it.formula) }
+-        val witnesses = event.witnesses.map { prob(it.formula) }
++        val parameterWitnesses = event.witnesses.filter { !it.label.endsWith("'") }.map { local(it.formula, it.label) }
++        val witnesses = event.witnesses.map { local(it.formula, it.label) }
+ 
+         // Abstract after-values that the concrete actions do not determine come from the abstract actions.
+         val abstractActions = event.refines.firstOrNull()?.actions.orEmpty()
+         val abstractEffects = abstractActions
+             .filter { a -> a.formula.tag == Formula.BECOMES_EQUAL_TO && a.formula.assignedIdentifiers.all { it.name in disappearing } }
+-            .map { prob(it.formula.baPredicate) }
++            .map { local(it.formula.baPredicate, it.label) }
+         val after = enabled + witnesses + actions + abstractEffects
+ 
+         // Variables the event may change, concrete or disappearing abstract ones.
+@@ -157,18 +253,18 @@ class ProofObligationGenerator {
+             if (event.refines.size == 1) {
+                 val concrete = event.guards.map { it.formula.toString() }.toSet()
+                 for (guard in event.refines.first().guards.filter { !it.theorem && it.formula.toString() !in concrete }) {
+-                    po("$prefix/${guard.label}/GRD", file, event.token, enabled + parameterWitnesses, prob(guard.formula))
++                    po("$prefix/${guard.label}/GRD", file, event.token, enabled + parameterWitnesses, guard.formula)
+                 }
+             } else {
+                 val alternatives = event.refines.joinToString(" ∨ ") { e ->
+-                    "(" + e.guards.filter { !it.theorem }.map { prob(it.formula) }.ifEmpty { listOf("⊤") }.joinToString(" ∧ ") { "($it)" } + ")"
++                    "(" + e.guards.filter { !it.theorem }.map { it.formula.toString() }.ifEmpty { listOf("⊤") }.joinToString(" ∧ ") { "($it)" } + ")"
+                 }
+-                po("$prefix/MRG", file, event.token, after, alternatives)
++                po("$prefix/MRG", file, event.token, after, pred(alternatives))
+             }
+             val concrete = event.actions.map { it.formula.toString() }.toSet()
+             for (action in abstractActions.filter { it.formula.toString() !in concrete }) {
+                 if (action.formula.assignedIdentifiers.any { it.name in info.variables }) {
+-                    po("$prefix/${action.label}/SIM", file, event.token, after, prob(action.formula.baPredicate))
++                    po("$prefix/${action.label}/SIM", file, event.token, after, action.formula.baPredicate)
+                 }
+             }
+         }
+@@ -178,52 +274,40 @@ class ProofObligationGenerator {
+             val abstractlyAssigned = abstractActions.flatMap { a -> a.formula.assignedIdentifiers.map { it.name } }.toSet()
+             for (action in event.actions) {
+                 for (variable in action.formula.assignedIdentifiers.map { it.name }.filter { it in abstractVariables && it !in abstractlyAssigned }) {
+-                    po("$prefix/$variable/EQL", file, action.token, enabled + prob(action.formula.baPredicate), "${renamed("$variable'")} = $variable")
++                    po("$prefix/$variable/EQL", file, action.token, enabled + local(action.formula.baPredicate, action.label), pred("$variable' = $variable"))
+                 }
+             }
+         }
+ 
+         for (witness in event.witnesses) {
+-            val bound = renamed(witness.label)
+             val hypotheses = if (witness.label.endsWith("'")) enabled + actions else enabled
+             wd(witness.formula)?.let { po("$prefix/${witness.label}/WWD", file, witness.token, state + actions, it) }
+-            po("$prefix/${witness.label}/WFIS", file, witness.token, hypotheses, "∃$bound·(${prob(witness.formula)})")
++            po("$prefix/${witness.label}/WFIS", file, witness.token, hypotheses, pred("∃${witness.label}·(${witness.formula})"))
+         }
+ 
+         val variant = info.variant
+         if (variant != null && event.convergence != Convergence.ORDINARY) {
+-            val now = prob(variant.formula)
+-            val next = primed(variant.formula, event.assigned)
++            val now = variant.formula.toString()
++            val next = primed(variant.formula, event.assigned).toString()
+             val strict = event.convergence == Convergence.CONVERGENT
+             if (variant.formula.type is IntegerType) {
+-                po("$prefix/NAT", file, event.token, enabled, "$now ∈ ℕ")
+-                po("$prefix/VAR", file, event.token, enabled + actions, if (strict) "$next < $now" else "$next ≤ $now")
++                po("$prefix/NAT", file, event.token, enabled, pred("$now ∈ ℕ"))
++                po("$prefix/VAR", file, event.token, enabled + actions, pred(if (strict) "$next < $now" else "$next ≤ $now"))
+             } else {
+-                po("$prefix/VAR", file, event.token, enabled + actions, if (strict) "$next ⊂ $now" else "$next ⊆ $now")
++                po("$prefix/VAR", file, event.token, enabled + actions, pred(if (strict) "$next ⊂ $now" else "$next ⊆ $now"))
+             }
+         }
+     }
+ 
+     /** The well-definedness condition of [formula], or null if it is trivial. */
+-    private fun wd(formula: Formula<*>): String? {
++    private fun wd(formula: Formula<*>): Predicate? {
+         val wd = formula.wdPredicate
+-        return if (wd.tag == Formula.BTRUE) null else prob(wd)
++        return if (wd.tag == Formula.BTRUE) null else wd
+     }
+ 
+-    /** [formula] with the after-values of [variables], in ProB's notation. */
+-    private fun primed(formula: Formula<*>, variables: Collection<String>): String {
++    /** [formula] with the after-values of [variables]. */
++    private fun <T : Formula<T>> primed(formula: T, variables: Collection<String>): T {
+         val substitution = formula.freeIdentifiers.filter { it.name in variables && !it.isPrimed }.associateWith { it.withPrime() as Expression }
+-        return prob(if (substitution.isEmpty()) formula else formula.substituteFreeIdents(substitution))
+-    }
+-
+-    private fun renamed(name: String) = if (name.endsWith("'")) name.dropLast(1) + PRIME_SUFFIX else name
+-
+-    /** Renders [formula] for ProB, which cannot read primed identifiers. */
+-    private fun prob(formula: Formula<*>): String {
+-        val primes = formula.freeIdentifiers.filter { it.isPrimed }
+-        if (primes.isEmpty()) return formula.toString()
+-        val factory = formula.factory
+-        val substitution = primes.associateWith { factory.makeFreeIdentifier(renamed(it.name), null, it.type) as Expression }
+-        return formula.substituteFreeIdents(substitution).toString()
++        return if (substitution.isEmpty()) formula else formula.substituteFreeIdents(substitution)
+     }
+ }
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProofSession.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProofSession.kt
+new file mode 100644
+index 0000000..f545002
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProofSession.kt
+@@ -0,0 +1,268 @@
++package b.language.server.proBMangement.prob
++
++import b.language.server.communication.CommunicatorInterface
++import com.google.inject.Guice
++import com.google.inject.Injector
++import com.google.inject.Stage
++import de.prob.animator.ReusableAnimator
++import org.eventb.core.ast.FormulaFactory
++import org.eventb.core.ast.IPosition
++import org.eventb.core.ast.Predicate
++import java.io.File
++
++/**
++ * Interactive proof of one obligation at a time, like Rodin's Proving perspective: the proof
++ * tree, the hypotheses and goal of the current node, and the tactics applying to them.
++ *
++ * It runs ProB in its own process, so that checking files while proving does not disturb it.
++ * Every change is saved to the component's .bpr file at once.
++ */
++class ProofSession(private val communicator: CommunicatorInterface) {
++
++    private val injector: Injector by lazy { Guice.createInjector(Stage.PRODUCTION, ProBKernelModule(communicator)) }
++    private val animator: ReusableAnimator by lazy { injector.getInstance(ReusableAnimator::class.java) }
++    private val factory = FormulaFactory.getDefault()
++
++    private var file: File? = null
++    private var obligations: List<ProofObligation> = emptyList()
++    private var tree: ProofTree? = null
++    private var current: ProofNode? = null
++    private var message = ""
++    private var prover: ProBProver? = null
++    private var timeout = 10000
++
++    /**
++     * Opens the obligation [name] of [file], or the first one not proved yet. [obligations] are
++     * those of the file's last check.
++     */
++    fun open(file: File, obligations: List<ProofObligation>, name: String?, timeout: Int): Map<String, Any?> {
++        if (this.file != file) closeProver()
++        this.file = file
++        this.obligations = obligations
++        this.timeout = timeout
++        message = ""
++        if (obligations.isEmpty()) {
++            tree = null
++            current = null
++            return failure("${file.name} has no proof obligations; save it, and fix its errors first")
++        }
++        val po = obligations.firstOrNull { it.name == name } ?: obligations.firstOrNull { !it.closed } ?: obligations.first()
++        if (name != null && po.name != name) message = "$name is not a proof obligation of ${file.name}"
++        val tree = ProofTree(po)
++        ProofStore(file).load()[po.name]?.let { tree.load(it) }
++        this.tree = tree
++        current = tree.root.openLeaves().firstOrNull() ?: tree.root
++        return view()
++    }
++
++    /** The name of the obligation at [line] (0-based) of [file], for following the cursor. */
++    fun at(file: File, obligations: List<ProofObligation>, line: Int): Map<String, Any?> {
++        val text = file.takeIf { it.isFile }?.readLines()?.getOrNull(line).orEmpty()
++        val labels = Regex("@([\\w'.]+)").findAll(text).map { it.groupValues[1] }.toList()
++        val candidates = obligations.filter { po ->
++            val parts = po.name.split("/")
++            labels.any { it in parts } || po.line == line + 1
++        }
++        val po = candidates.firstOrNull { !it.closed } ?: candidates.firstOrNull()
++        return mapOf("name" to po?.name)
++    }
++
++    fun close() {
++        closeProver()
++        file = null
++        tree = null
++        current = null
++        obligations = emptyList()
++    }
++
++    private fun closeProver() {
++        prover?.close()
++        prover = null
++    }
++
++    /** Runs an action of the panel; see [view] for the answer. */
++    fun perform(action: String, node: String?, tactic: String?, hyp: Int?, position: String?, input: String?): Map<String, Any?> {
++        val tree = tree ?: return failure("no proof obligation is open")
++        val target = node?.let { tree.root.find(it) } ?: current ?: tree.root
++        message = ""
++        try {
++            when (action) {
++                "view" -> {}
++                "goto" -> current = target
++                "apply" -> {
++                    val chosen = Tactics.named(tactic ?: throw TacticException("no tactic given"))
++                    val predicate = hyp?.let { i -> target.sequent.hyps.keys.elementAtOrNull(i) ?: throw TacticException("no hypothesis $i") }
++                    val at = position?.takeIf { it.isNotEmpty() }?.let { FormulaFactory.makePosition(it) } ?: IPosition.ROOT
++                    step(tree, target, chosen.make(target.sequent, Target(predicate, at), input))
++                }
++                "prob" -> prove(tree, target.openLeaves())
++                "proball" -> prove(tree, tree.root.openLeaves())
++                "review" -> step(tree, target, Tactics.review(target.sequent))
++                "prune" -> {
++                    tree.remember()
++                    target.prune()
++                    current = target
++                    changed(tree)
++                }
++                "undo", "redo" -> {
++                    val path = current?.path
++                    if (if (action == "undo") tree.undo() else tree.redo()) {
++                        current = path?.let { tree.root.find(it) } ?: tree.root.openLeaves().firstOrNull() ?: tree.root
++                        changed(tree)
++                    } else message = "nothing to $action"
++                }
++                else -> message = "unknown action $action"
++            }
++        } catch (e: TacticException) {
++            message = e.message.orEmpty()
++        }
++        return view()
++    }
++
++    /** Applies [rule] at [node], closes what it can of the new leaves and saves. */
++    private fun step(tree: ProofTree, node: ProofNode, rule: Rule) {
++        tree.remember()
++        if (!node.apply(rule)) throw TacticException("${rule.display} does not apply here")
++        postTactic(node)
++        current = node.openLeaves().firstOrNull() ?: tree.root.openLeaves().firstOrNull() ?: node
++        changed(tree)
++    }
++
++    /** Closes the open leaves below [node] that need no choice, as Rodin's post-tactic. */
++    private fun postTactic(node: ProofNode) {
++        for (leaf in node.openLeaves()) Tactics.close(leaf.sequent)?.let { leaf.apply(it) }
++    }
++
++    /** Tries to close [leaves] with ProB. */
++    private fun prove(tree: ProofTree, leaves: List<ProofNode>) {
++        val open = leaves.filter { it.isOpen }
++        if (open.isEmpty()) {
++            message = "no open goal"
++            return
++        }
++        val prover = prover ?: ProBProver(injector, animator, carrierSets(), timeout).also { prover = it }
++        val proved = mutableListOf<ProofNode>()
++        val failures = mutableListOf<String>()
++        for (leaf in open) {
++            val hyps = leaf.sequent.hyps.keys.toList()
++            when (val result = prover.solve(ProBText.negation(leaf.sequent.env, hyps, leaf.sequent.goal))) {
++                is ProBProver.Result.Proved -> proved += leaf
++                is ProBProver.Result.Counterexample -> failures += "counterexample: ${result.detail}"
++                is ProBProver.Result.Unknown -> failures += "ProB cannot decide: ${result.reason}"
++            }
++        }
++        message = when {
++            open.size == 1 -> if (proved.isNotEmpty()) "ProB proved the goal" else failures.first()
++            else -> "ProB proved ${proved.size} of ${open.size} goals" + (failures.firstOrNull()?.let { "; $it" } ?: "")
++        }
++        if (proved.isEmpty()) return
++        tree.remember()
++        proved.forEach { it.apply(Tactics.prob(it.sequent, it.sequent.hyps.keys)) }
++        current = tree.root.openLeaves().firstOrNull() ?: current
++        changed(tree)
++    }
++
++    private fun carrierSets(): List<String> {
++        val project = CamilleProject(file!!)
++        project.check()
++        return ProBProver.carrierSets(project)
++    }
++
++    /** Saves the proof and updates the obligation's status. */
++    private fun changed(tree: ProofTree) {
++        ProofStore(file!!).save(tree)
++        tree.po.updateStatus(tree)
++    }
++
++    private fun failure(text: String) = mapOf("error" to text)
++
++    /** The obligation being proved. */
++    val obligation: ProofObligation? get() = tree?.po
++
++    // ----------------------------------------------------------------------
++    // The view sent to the client
++
++    /**
++     * What the panel shows: the obligations, the proof tree, and the current node's hypotheses
++     * and goal. Each predicate lists the tactics applying to it, by character range of the text
++     * (the operator of a sub-formula, or the whole predicate), as Rodin marks operators in red.
++     */
++    fun view(): Map<String, Any?> {
++        val tree = tree ?: return failure("no proof obligation is open")
++        val node = current ?: tree.root
++        val po = tree.po
++        val origins = po.hypotheses.associate { it.predicate to it.origin }
++        return mapOf(
++            "uri" to file!!.toURI().toString(),
++            "name" to po.name,
++            "status" to po.status.name.lowercase(),
++            "detail" to po.detail,
++            "line" to po.line - 1,
++            "complete" to tree.complete,
++            "obligations" to obligations.map { mapOf("name" to it.name, "status" to it.status.name.lowercase()) },
++            "tree" to tree.root.nodes().map { n ->
++                mapOf(
++                    "path" to n.path,
++                    "depth" to n.path.count { it == '.' } + if (n.path.isEmpty()) 0 else 1,
++                    "display" to (n.rule?.display ?: n.broken?.rule?.let { "broken: ${it.display}" } ?: "…"),
++                    "open" to n.isOpen,
++                    "closed" to n.isClosed,
++                    "broken" to (n.broken != null),
++                    "current" to (n === node),
++                )
++            },
++            "node" to node.path,
++            "open" to node.isOpen,
++            "hyps" to node.sequent.hyps.entries.mapIndexed { i, (p, state) ->
++                predicate(p, false) + mapOf("id" to i, "origin" to origins[p], "state" to state.name.lowercase())
++            },
++            "goal" to predicate(node.sequent.goal, true),
++            "message" to message,
++        )
++    }
++
++    /** A predicate's text and the tactics at its operators. */
++    private fun predicate(p: Predicate, goal: Boolean): Map<String, Any?> {
++        val text = p.toString()
++        val reparsed = factory.parsePredicate(text, null).takeUnless { it.hasProblem() }?.parsedPredicate
++        val whole = mutableListOf<Map<String, Any?>>()
++        val operators = LinkedHashMap<Pair<Int, Int>, MutableList<Map<String, Any?>>>()
++        for ((tactic, position) in Tactics.applicable(p, goal)) {
++            val entry = mapOf(
++                "name" to tactic.name,
++                "label" to tactic.label,
++                "position" to position.toString(),
++                "input" to tactic.input,
++            )
++            val range = if (tactic.positional) reparsed?.let { operatorRange(text, it, position) } else null
++            if (range == null) whole += entry else {
++                operators.getOrPut(range) { mutableListOf() } += entry
++                // Rewrites are also listed for the whole predicate, with the sub-formula they rewrite.
++                whole += entry + ("label" to "${tactic.label} in ${reparsed?.getSubFormula(position)}")
++            }
++        }
++        return mapOf(
++            "text" to text,
++            "tactics" to whole,
++            "operators" to operators.map { (range, tactics) -> mapOf("start" to range.first, "end" to range.second, "tactics" to tactics) },
++        )
++    }
++
++    /** The characters of [text] showing the operator of the sub-formula at [position]: [start, end). */
++    private fun operatorRange(text: String, parsed: Predicate, position: IPosition): Pair<Int, Int>? {
++        val sub = parsed.getSubFormula(position) ?: return null
++        val location = sub.sourceLocation ?: return null
++        val children = (0 until sub.childCount).mapNotNull { sub.getChild(it).sourceLocation }
++        val (from, to) = when {
++            children.size >= 2 -> children[children.size - 2].end + 1 to children.last().start
++            children.size == 1 && children[0].start > location.start -> location.start to children[0].start
++            else -> location.start to location.end + 1
++        }
++        if (from >= to || to > text.length) return location.start to minOf(location.end + 1, text.length)
++        var start = from
++        var end = to
++        while (start < end && (text[start] == ' ' || text[start] == ')')) start++
++        while (end > start && (text[end - 1] == ' ' || text[end - 1] == '(')) end--
++        return if (start < end) start to end else from to to
++    }
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/ProofStore.kt b/src/main/kotlin/b/language/server/proBMangement/prob/ProofStore.kt
+new file mode 100644
+index 0000000..cef8202
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/ProofStore.kt
+@@ -0,0 +1,373 @@
++package b.language.server.proBMangement.prob
++
++import org.eventb.core.ast.Expression
++import org.eventb.core.ast.Formula
++import org.eventb.core.ast.FormulaFactory
++import org.eventb.core.ast.FreeIdentifier
++import org.eventb.core.ast.ITypeEnvironment
++import org.eventb.core.ast.ITypeEnvironmentBuilder
++import org.eventb.core.ast.Predicate
++import org.w3c.dom.Document
++import org.w3c.dom.Element
++import java.io.File
++import javax.xml.parsers.DocumentBuilderFactory
++import javax.xml.transform.OutputKeys
++import javax.xml.transform.TransformerFactory
++import javax.xml.transform.dom.DOMSource
++import javax.xml.transform.stream.StreamResult
++
++/**
++ * The proofs of a component in Rodin's files: `<component>.bpr` holds the proof trees,
++ * `<component>.bps` the status of each obligation. The XML is Rodin's, so Rodin reuses the
++ * proofs made here once the component is imported, and proofs made in Rodin are replayed here.
++ */
++class ProofStore(private val component: File) {
++
++    private val base = component.absoluteFile.parentFile
++    private val name = component.nameWithoutExtension
++    val proofFile = File(base, "$name.bpr")
++    val statusFile = File(base, "$name.bps")
++    private val factory = FormulaFactory.getDefault()
++
++    companion object {
++        private const val CORE = "org.eventb.core"
++        private const val PR_FILE = "$CORE.prFile"
++        private const val PS_FILE = "$CORE.psFile"
++        private const val PROOF = "$CORE.prProof"
++        private const val STATUS = "$CORE.psStatus"
++        private const val RULE = "$CORE.prRule"
++        private const val ANTE = "$CORE.prAnte"
++        private const val HYP_ACTION = "$CORE.prHypAction"
++        private const val IDENT = "$CORE.prIdent"
++        private const val PRED = "$CORE.prPred"
++        private const val EXPR = "$CORE.prExpr"
++        private const val REASONER = "$CORE.prReas"
++        private const val STRING = "$CORE.prString"
++        private const val PRED_REF = "$CORE.prPredRef"
++        private const val EXPR_REF = "$CORE.prExprRef"
++
++        private const val CONFIDENCE = "$CORE.confidence"
++        private const val MANUAL = "$CORE.psManual"
++        private const val BROKEN = "$CORE.psBroken"
++        private const val GOAL = "$CORE.prGoal"
++        private const val HYPS = "$CORE.prHyps"
++        private const val UNSEL = "$CORE.prUnsel"
++        private const val HIDDEN = "$CORE.prHidden"
++        private const val INF_HYPS = "$CORE.prInfHyps"
++        private const val DISPLAY = "$CORE.prDisplay"
++        private const val REF = "$CORE.prRef"
++        private const val VALUE = "$CORE.prSValue"
++        private const val FRESH = "$CORE.prFresh"
++        private const val SETS = "$CORE.prSets"
++        private const val REASONER_ID = "$CORE.prRID"
++        private const val TYPE = "$CORE.type"
++        private const val PREDICATE = "$CORE.predicate"
++        private const val EXPRESSION = "$CORE.expression"
++    }
++
++    // ----------------------------------------------------------------------
++    // Reading
++
++    /** The saved proofs, by obligation name; proofs that cannot be read are left out. */
++    fun load(): Map<String, Skeleton> {
++        val document = read(proofFile) ?: return emptyMap()
++        val result = LinkedHashMap<String, Skeleton>()
++        for (proof in children(document.documentElement, PROOF)) {
++            try {
++                ProofReader(proof).root()?.let { result[proof.getAttribute("name")] = it }
++            } catch (e: RuntimeException) {
++                // A proof Rodin wrote with formulas we cannot read stays in the file untouched.
++            }
++        }
++        return result
++    }
++
++    private fun read(file: File): Document? {
++        if (!file.isFile) return null
++        return try {
++            DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
++        } catch (e: Exception) {
++            null
++        }
++    }
++
++    private fun children(element: Element, tag: String): List<Element> {
++        val result = mutableListOf<Element>()
++        var node = element.firstChild
++        while (node != null) {
++            if (node is Element && node.tagName == tag) result += node
++            node = node.nextSibling
++        }
++        return result
++    }
++
++    private fun refs(value: String): List<String> = if (value.isEmpty()) emptyList() else value.split(",")
++
++    /** Reads one prProof element: its type environment, formula pools and rule tree. */
++    private inner class ProofReader(private val proof: Element) {
++        private val env: ITypeEnvironment
++        private val reasoners = children(proof, REASONER).associate { it.getAttribute("name") to it.getAttribute(REASONER_ID) }
++        private val predicates = HashMap<String, Predicate>()
++        private val expressions = HashMap<String, Expression>()
++
++        init {
++            val builder = factory.makeTypeEnvironment()
++            refs(proof.getAttribute(SETS)).forEach { builder.addGivenSet(it) }
++            addIdents(builder, proof)
++            env = builder.makeSnapshot()
++            for (p in children(proof, PRED)) {
++                val local = env.makeBuilder().also { addIdents(it, p) }
++                predicates[p.getAttribute("name")] = parsePredicate(p.getAttribute(PREDICATE), local)
++            }
++            for (e in children(proof, EXPR)) {
++                val local = env.makeBuilder().also { addIdents(it, e) }
++                expressions[e.getAttribute("name")] = parseExpression(e.getAttribute(EXPRESSION), local)
++            }
++        }
++
++        private fun addIdents(builder: ITypeEnvironmentBuilder, element: Element) {
++            for (ident in children(element, IDENT)) builder.addName(ident.getAttribute("name"), parseType(ident.getAttribute(TYPE), builder))
++        }
++
++        private fun idents(element: Element): List<FreeIdentifier> = children(element, IDENT).map {
++            factory.makeFreeIdentifier(it.getAttribute("name"), null, parseType(it.getAttribute(TYPE), env.makeBuilder()))
++        }
++
++        private fun parseType(text: String, builder: ITypeEnvironmentBuilder) =
++            factory.parseType(text).parsedType ?: error("cannot read type $text")
++
++        private fun parsePredicate(text: String, builder: ITypeEnvironmentBuilder): Predicate {
++            val result = factory.parsePredicate(text, null)
++            check(!result.hasProblem()) { "cannot read predicate $text" }
++            val predicate = result.parsedPredicate
++            check(!predicate.typeCheck(builder).hasProblem()) { "cannot type predicate $text" }
++            return predicate
++        }
++
++        private fun parseExpression(text: String, builder: ITypeEnvironmentBuilder): Expression {
++            val result = factory.parseExpression(text, null)
++            check(!result.hasProblem()) { "cannot read expression $text" }
++            val expression = result.parsedExpression
++            check(!expression.typeCheck(builder).hasProblem()) { "cannot type expression $text" }
++            return expression
++        }
++
++        private fun predicate(ref: String) = predicates[ref] ?: error("unknown predicate $ref")
++        private fun preds(element: Element, attribute: String) =
++            if (element.hasAttribute(attribute)) refs(element.getAttribute(attribute)).map { predicate(it) } else emptyList()
++
++        fun root(): Skeleton? = children(proof, RULE).firstOrNull()?.let { skeleton(it) }
++
++        private fun skeleton(rule: Element): Skeleton {
++            val antecedents = children(rule, ANTE).sortedBy { it.getAttribute("name").toIntOrNull() ?: 0 }
++            val inputs = mutableListOf<RuleInput>()
++            for (s in children(rule, STRING)) inputs += RuleInput.Text(s.getAttribute("name").removePrefix("."), s.getAttribute(VALUE))
++            for (s in children(rule, PRED_REF)) inputs += RuleInput.Predicates(s.getAttribute("name").removePrefix("."), refs(s.getAttribute(REF)).map { predicate(it) })
++            for (s in children(rule, EXPR_REF)) {
++                inputs += RuleInput.Expressions(s.getAttribute("name").removePrefix("."), s.getAttribute(REF).split(",").map { r -> if (r.isEmpty()) null else expressions[r] })
++            }
++            val ref = rule.getAttribute("name")
++            val parsed = Rule(
++                reasoner = reasoners[ref] ?: ref,
++                display = rule.getAttribute(DISPLAY),
++                goal = if (rule.hasAttribute(GOAL)) predicate(rule.getAttribute(GOAL)) else null,
++                needed = preds(rule, HYPS).toSet(),
++                antecedents = antecedents.map { antecedent(it) },
++                confidence = rule.getAttribute(CONFIDENCE).toIntOrNull() ?: Confidence.DISCHARGED_MAX,
++                inputs = inputs,
++            )
++            return Skeleton(parsed, antecedents.map { a -> children(a, RULE).firstOrNull()?.let { skeleton(it) } ?: Skeleton(null, emptyList()) })
++        }
++
++        private fun antecedent(element: Element): Antecedent {
++            val actions = children(element, HYP_ACTION).map { a ->
++                val type = a.getAttribute("name").trimEnd { it.isDigit() }
++                when (type) {
++                    HypAction.FORWARD_INF -> HypAction.Inference(type, preds(a, HYPS), idents(a), preds(a, INF_HYPS))
++                    HypAction.REWRITE -> {
++                        val hidden = preds(a, HIDDEN)
++                        HypAction.Inference(type, preds(a, HYPS) + hidden, idents(a), preds(a, INF_HYPS), hidden)
++                    }
++                    else -> HypAction.Selection(type, preds(a, HYPS))
++                }
++            }
++            return Antecedent(
++                goal = if (element.hasAttribute(GOAL)) predicate(element.getAttribute(GOAL)) else null,
++                added = preds(element, HYPS),
++                unselected = preds(element, UNSEL),
++                idents = idents(element),
++                actions = actions,
++            )
++        }
++    }
++
++    // ----------------------------------------------------------------------
++    // Writing
++
++    /**
++     * Saves the proof of [tree]'s obligation, replacing its previous proof and keeping the others
++     * as they are; an empty proof is removed. The status file is updated likewise.
++     */
++    fun save(tree: ProofTree) {
++        val name = tree.po.name
++        val skeleton = tree.root.skeleton()
++        val document = read(proofFile) ?: newDocument(PR_FILE)
++        children(document.documentElement, PROOF).filter { it.getAttribute("name") == name }.forEach { document.documentElement.removeChild(it) }
++        if (skeleton.rule != null) document.documentElement.appendChild(ProofWriter(document, tree, skeleton).write())
++        write(document, proofFile)
++
++        val status = read(statusFile) ?: newDocument(PS_FILE)
++        children(status.documentElement, STATUS).filter { it.getAttribute("name") == name }.forEach { status.documentElement.removeChild(it) }
++        if (skeleton.rule != null) {
++            val element = status.createElement(STATUS)
++            element.setAttribute("name", name)
++            element.setAttribute(CONFIDENCE, tree.confidence.toString())
++            element.setAttribute(MANUAL, "true")
++            element.setAttribute(BROKEN, tree.root.nodes().any { it.broken != null }.toString())
++            status.documentElement.appendChild(element)
++        }
++        write(status, statusFile)
++    }
++
++    private fun newDocument(root: String): Document {
++        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument()
++        document.xmlStandalone = false
++        document.appendChild(document.createElement(root).apply { if (root == PR_FILE) setAttribute("version", "1") })
++        return document
++    }
++
++    private fun write(document: Document, file: File) {
++        val transformer = TransformerFactory.newInstance().newTransformer()
++        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8")
++        transformer.setOutputProperty(OutputKeys.INDENT, "yes")
++        transformer.setOutputProperty(OutputKeys.STANDALONE, "no")
++        // Re-indenting a file read back would add blank lines; strip them first.
++        stripWhitespace(document.documentElement)
++        file.outputStream().use { transformer.transform(DOMSource(document), StreamResult(it)) }
++    }
++
++    private fun stripWhitespace(element: Element) {
++        var node = element.firstChild
++        while (node != null) {
++            val next = node.nextSibling
++            if (node.nodeType == org.w3c.dom.Node.TEXT_NODE && node.textContent.isBlank()) element.removeChild(node)
++            else if (node is Element) stripWhitespace(node)
++            node = next
++        }
++    }
++
++    /** Writes one prProof element, with the pools of formulas and reasoners as Rodin's ProofStoreCollector. */
++    private inner class ProofWriter(private val document: Document, private val tree: ProofTree, private val skeleton: Skeleton) {
++        private val predicates = LinkedHashMap<Predicate, String>()
++        private val expressions = LinkedHashMap<Expression, String>()
++        private val reasoners = LinkedHashMap<String, String>()
++        private val dependencies = tree.dependencies()
++        /** Identifiers in the obligation's type environment: the proof's base environment. */
++        private val poEnv = tree.po.env
++
++        private fun pred(p: Predicate) = predicates.getOrPut(p) { "p${predicates.size}" }
++        private fun expr(e: Expression) = expressions.getOrPut(e) { "e${expressions.size}" }
++        private fun preds(ps: Collection<Predicate>) = ps.joinToString(",") { pred(it) }
++
++        fun write(): Element {
++            val proof = document.createElement(PROOF)
++            proof.setAttribute("name", tree.po.name)
++            proof.setAttribute(CONFIDENCE, tree.confidence.toString())
++            proof.setAttribute(FRESH, dependencies.introduced.joinToString(","))
++            dependencies.goal?.let { proof.setAttribute(GOAL, pred(it)) }
++            proof.setAttribute(HYPS, preds(dependencies.hyps))
++            proof.setAttribute(MANUAL, "true")
++            skeleton.rule?.let { proof.appendChild(rule(it, skeleton)) }
++
++            // The base type environment: the obligation's identifiers the stored formulas mention.
++            val mentioned = LinkedHashSet<String>()
++            (predicates.keys + expressions.keys).forEach { f -> f.freeIdentifiers.forEach { mentioned += it.name } }
++            val sets = LinkedHashSet<String>()
++            val idents = mutableListOf<Pair<String, String>>()
++            val iterator = poEnv.iterator
++            while (iterator.hasNext()) {
++                iterator.advance()
++                if (iterator.name !in mentioned && !iterator.isGivenSet) continue
++                if (iterator.isGivenSet) {
++                    if (iterator.name in mentioned || typesMention(iterator.name)) sets += iterator.name
++                } else {
++                    idents += iterator.name to iterator.type.toString()
++                }
++            }
++            if (sets.isNotEmpty()) proof.setAttribute(SETS, sets.joinToString(","))
++            for ((n, type) in idents) proof.appendChild(ident(n, type))
++            for ((p, ref) in predicates) proof.appendChild(stored(PRED, PREDICATE, ref, p))
++            for ((e, ref) in expressions) proof.appendChild(stored(EXPR, EXPRESSION, ref, e))
++            for ((id, ref) in reasoners) proof.appendChild(document.createElement(REASONER).apply {
++                setAttribute("name", ref)
++                setAttribute(REASONER_ID, id)
++            })
++            return proof
++        }
++
++        /** Whether a type in the stored formulas mentions the given set [set]. */
++        private fun typesMention(set: String): Boolean = (predicates.keys + expressions.keys).any { f ->
++            f.freeIdentifiers.any { i -> i.type.toExpression().freeIdentifiers.any { it.name == set } }
++        }
++
++        private fun ident(name: String, type: String) = document.createElement(IDENT).apply {
++            setAttribute("name", name)
++            setAttribute(TYPE, type)
++        }
++
++        /** A pooled formula; identifiers introduced by the proof are declared inside it, as Rodin does. */
++        private fun stored(tag: String, attribute: String, ref: String, formula: Formula<*>) = document.createElement(tag).apply {
++            setAttribute("name", ref)
++            setAttribute(attribute, formula.toString())
++            formula.freeIdentifiers.filter { !poEnv.contains(it.name) }.forEach { appendChild(ident(it.name, it.type.toString())) }
++        }
++
++        private fun rule(rule: Rule, skeleton: Skeleton): Element {
++            val element = document.createElement(RULE)
++            element.setAttribute("name", reasoners.getOrPut(rule.reasoner) { "r${reasoners.size}" })
++            element.setAttribute(CONFIDENCE, rule.confidence.toString())
++            element.setAttribute(DISPLAY, rule.display)
++            rule.goal?.let { element.setAttribute(GOAL, pred(it)) }
++            element.setAttribute(HYPS, preds(rule.needed))
++            rule.antecedents.forEachIndexed { i, antecedent ->
++                val child = antecedent(i, antecedent)
++                skeleton.children.getOrNull(i)?.let { s -> s.rule?.let { child.appendChild(rule(it, s)) } }
++                element.appendChild(child)
++            }
++            for (input in rule.inputs) {
++                element.appendChild(when (input) {
++                    is RuleInput.Text -> document.createElement(STRING).apply { setAttribute(VALUE, input.value) }
++                    is RuleInput.Predicates -> document.createElement(PRED_REF).apply { setAttribute(REF, preds(input.values)) }
++                    is RuleInput.Expressions -> document.createElement(EXPR_REF).apply {
++                        setAttribute(REF, input.values.joinToString(",") { e -> e?.let { expr(it) } ?: "" })
++                    }
++                }.apply { setAttribute("name", "." + input.key) })
++            }
++            return element
++        }
++
++        private fun antecedent(index: Int, antecedent: Antecedent): Element {
++            val element = document.createElement(ANTE)
++            element.setAttribute("name", index.toString())
++            antecedent.goal?.let { element.setAttribute(GOAL, pred(it)) }
++            if (antecedent.added.isNotEmpty()) element.setAttribute(HYPS, preds(antecedent.added))
++            if (antecedent.unselected.isNotEmpty()) element.setAttribute(UNSEL, preds(antecedent.unselected))
++            antecedent.idents.forEach { element.appendChild(ident(it.name, it.type.toString())) }
++            antecedent.actions.forEachIndexed { i, action ->
++                element.appendChild(document.createElement(HYP_ACTION).apply {
++                    setAttribute("name", action.type + i)
++                    when (action) {
++                        is HypAction.Selection -> setAttribute(HYPS, preds(action.hyps))
++                        is HypAction.Inference -> {
++                            setAttribute(HYPS, preds(action.hyps - action.hidden.toSet()))
++                            if (action.type == HypAction.REWRITE) setAttribute(HIDDEN, preds(action.hidden))
++                            setAttribute(INF_HYPS, preds(action.inferred))
++                            action.idents.forEach { appendChild(ident(it.name, it.type.toString())) }
++                        }
++                    }
++                })
++            }
++            return element
++        }
++    }
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Proving.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Proving.kt
+new file mode 100644
+index 0000000..9f1d4e5
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Proving.kt
+@@ -0,0 +1,305 @@
++package b.language.server.proBMangement.prob
++
++import org.eventb.core.ast.Expression
++import org.eventb.core.ast.Formula
++import org.eventb.core.ast.FreeIdentifier
++import org.eventb.core.ast.ISealedTypeEnvironment
++import org.eventb.core.ast.ITypeEnvironment
++import org.eventb.core.ast.Predicate
++
++/*
++ * Interactive proofs as in Rodin's sequent prover (org.eventb.core.seqprover): a proof is a tree of
++ * rules, each turning a sequent into the sequents of its antecedents. Rules are kept in Rodin's
++ * form (reasoner, goal, needed hypotheses, antecedents), so that they are written to and read from
++ * Rodin's .bpr files, and are replayed structurally, as Rodin reuses proofs.
++ */
++
++/** Rodin's confidence levels (IConfidence). */
++object Confidence {
++    const val PENDING = 0
++    const val REVIEWED_MAX = 500
++    const val DISCHARGED_MAX = 1000
++}
++
++enum class HypState { SELECTED, VISIBLE, HIDDEN }
++
++/** A sequent: hypotheses, each selected, visible or hidden, and a goal. */
++class Sequent(val env: ISealedTypeEnvironment, val hyps: Map<Predicate, HypState>, val goal: Predicate) {
++
++    fun contains(predicate: Predicate) = predicate in hyps
++    fun containsAll(predicates: Collection<Predicate>) = predicates.all { it in hyps }
++    fun state(predicate: Predicate) = hyps[predicate]
++    val factory get() = goal.factory
++
++    companion object {
++        fun of(po: ProofObligation): Sequent {
++            val hyps = LinkedHashMap<Predicate, HypState>()
++            po.hypotheses.forEach { hyps[it.predicate] = if (it.selected) HypState.SELECTED else HypState.VISIBLE }
++            return Sequent(po.env.makeSnapshot(), hyps, po.goal)
++        }
++    }
++}
++
++/** A change to the hypotheses of an antecedent, as Rodin's IHypAction. */
++sealed class HypAction(val type: String) {
++    /** SELECT, DESELECT, HIDE or SHOW [hyps]. */
++    class Selection(type: String, val hyps: List<Predicate>) : HypAction(type)
++
++    /** FORWARD_INF: [inferred] follows from [hyps]; REWRITE: [inferred] replaces [hidden]. */
++    class Inference(type: String, val hyps: List<Predicate>, val idents: List<FreeIdentifier>,
++                    val inferred: List<Predicate>, val hidden: List<Predicate> = emptyList()) : HypAction(type)
++
++    companion object {
++        const val SELECT = "SELECT"
++        const val DESELECT = "DESELECT"
++        const val HIDE = "HIDE"
++        const val SHOW = "SHOW"
++        const val FORWARD_INF = "FORWARD_INF"
++        const val REWRITE = "REWRITE"
++    }
++}
++
++/** A sequent the rule produces: a new goal (or the old one), hypotheses and identifiers added. */
++class Antecedent(
++    val goal: Predicate?,
++    val added: List<Predicate> = emptyList(),
++    /** Added hypotheses (also in [added]) that are not selected. */
++    val unselected: List<Predicate> = emptyList(),
++    val idents: List<FreeIdentifier> = emptyList(),
++    val actions: List<HypAction> = emptyList(),
++)
++
++/** The input a reasoner stores with its rule, under a key, as Rodin's IReasonerInputWriter. */
++sealed class RuleInput(val key: String) {
++    class Text(key: String, val value: String) : RuleInput(key)
++    class Expressions(key: String, val values: List<Expression?>) : RuleInput(key)
++    class Predicates(key: String, val values: List<Predicate>) : RuleInput(key)
++}
++
++/**
++ * A rule of a proof, as Rodin's IProofRule. [reasoner] is the reasoner's id with its version,
++ * as Rodin writes it (org.eventb.core.seqprover.eq:1).
++ */
++class Rule(
++    val reasoner: String,
++    val display: String,
++    val goal: Predicate?,
++    val needed: Set<Predicate>,
++    val antecedents: List<Antecedent>,
++    val confidence: Int = Confidence.DISCHARGED_MAX,
++    val inputs: List<RuleInput> = emptyList(),
++) {
++    /** The antecedents' sequents, or null if the rule does not apply to [sequent]. */
++    fun apply(sequent: Sequent): List<Sequent>? {
++        if (!sequent.containsAll(needed)) return null
++        if (goal != null && goal != sequent.goal) return null
++        val goalInstantiation = if (goal == null) sequent.goal else null
++        return antecedents.map { generate(sequent, it, goalInstantiation) ?: return null }
++    }
++
++    private fun generate(sequent: Sequent, antecedent: Antecedent, goalInstantiation: Predicate?): Sequent? {
++        val newGoal = antecedent.goal ?: goalInstantiation ?: return null
++        val env = withIdents(sequent.env, antecedent.idents) ?: return null
++        if (!typed(env, antecedent.added + newGoal)) return null
++        if (!antecedent.added.containsAll(antecedent.unselected)) return null
++        val hyps = LinkedHashMap(sequent.hyps)
++        for (hyp in antecedent.added) {
++            hyps[hyp] = if (hyp in antecedent.unselected) {
++                if (hyps[hyp] == HypState.SELECTED) HypState.SELECTED else HypState.VISIBLE
++            } else HypState.SELECTED
++        }
++        var result = Sequent(env, hyps, newGoal)
++        for (action in antecedent.actions) result = perform(result, action)
++        return result
++    }
++
++    companion object {
++        /** [env] with the fresh identifiers [idents], or null if one is not fresh. */
++        fun withIdents(env : ISealedTypeEnvironment, idents : List<FreeIdentifier>) : ISealedTypeEnvironment? {
++            if (idents.isEmpty()) return env
++            val builder = env.makeBuilder()
++            for (ident in idents) {
++                if (builder.contains(ident.name)) return null
++                builder.add(ident)
++            }
++            return builder.makeSnapshot()
++        }
++
++        /** Whether every free identifier of [predicates] is in [env] with its type. */
++        fun typed(env : ITypeEnvironment, predicates : Collection<Predicate>) : Boolean =
++            predicates.all { p -> p.isTypeChecked && p.freeIdentifiers.all { env.getType(it.name) == it.type } }
++
++        fun perform(sequent : Sequent, action : HypAction) : Sequent {
++            val hyps = LinkedHashMap(sequent.hyps)
++            when (action) {
++                is HypAction.Selection -> {
++                    for (hyp in action.hyps) {
++                        val state = hyps[hyp] ?: continue
++                        hyps[hyp] = when (action.type) {
++                            HypAction.SELECT -> if (state == HypState.HIDDEN) state else HypState.SELECTED
++                            HypAction.DESELECT -> if (state == HypState.SELECTED) HypState.VISIBLE else state
++                            HypAction.HIDE -> HypState.HIDDEN
++                            HypAction.SHOW -> if (state == HypState.HIDDEN) HypState.VISIBLE else state
++                            else -> state
++                        }
++                    }
++                    return Sequent(sequent.env, hyps, sequent.goal)
++                }
++                is HypAction.Inference -> {
++                    // Skipped when the hypotheses are gone, as in Rodin.
++                    if (!sequent.containsAll(action.hyps)) return sequent
++                    val env = withIdents(sequent.env, action.idents) ?: return sequent
++                    if (!typed(env, action.inferred)) return sequent
++                    val select = action.hyps.isEmpty() || action.hyps.any { hyps[it] == HypState.SELECTED }
++                    val hide = !select && action.hyps.all { hyps[it] == HypState.HIDDEN }
++                    for (inferred in action.inferred) {
++                        val state = hyps[inferred]
++                        if (state == null) {
++                            hyps[inferred] = if (select) HypState.SELECTED else if (hide) HypState.HIDDEN else HypState.VISIBLE
++                        } else if (select && state != HypState.HIDDEN) {
++                            hyps[inferred] = HypState.SELECTED
++                        }
++                    }
++                    for (hidden in action.hidden) if (hidden in hyps) hyps[hidden] = HypState.HIDDEN
++                    return Sequent(env, hyps, sequent.goal)
++                }
++            }
++        }
++    }
++}
++
++/** A node of a proof tree: open while it has no rule. */
++class ProofNode(val sequent: Sequent, val parent: ProofNode? = null) {
++    var rule: Rule? = null
++        private set
++    var children: List<ProofNode> = emptyList()
++        private set
++    /** The saved proof from this node, whose first rule no longer applies. */
++    var broken: Skeleton? = null
++
++    val isOpen get() = rule == null
++
++    /** Rodin's confidence: pending if a leaf is open, reviewed if a step is reviewed. */
++    val confidence: Int get() = rule?.let { r -> (children.map { it.confidence } + r.confidence).min() } ?: Confidence.PENDING
++
++    val isClosed get() = confidence > Confidence.PENDING
++
++    /** Applies [rule] here, replacing the subtree; false if it does not apply. */
++    fun apply(rule: Rule): Boolean {
++        val sequents = rule.apply(sequent) ?: return false
++        this.rule = rule
++        broken = null
++        children = sequents.map { ProofNode(it, this) }
++        return true
++    }
++
++    fun prune() {
++        rule = null
++        broken = null
++        children = emptyList()
++    }
++
++    /** The node's place in the tree: the indices of the antecedents leading to it, as 0.1.0. */
++    val path: String get() = parent?.let { p -> (p.path.takeIf { it.isNotEmpty() }?.plus(".") ?: "") + p.children.indexOf(this) } ?: ""
++
++    fun find(path: String): ProofNode? {
++        if (path.isEmpty()) return this
++        var node: ProofNode = this
++        for (index in path.split(".")) node = node.children.getOrNull(index.toIntOrNull() ?: return null) ?: return null
++        return node
++    }
++
++    fun nodes(): List<ProofNode> = listOf(this) + children.flatMap { it.nodes() }
++
++    fun openLeaves(): List<ProofNode> = nodes().filter { it.isOpen }
++
++    /** The rules from here; a broken proof is kept as it was saved, so saving does not lose it. */
++    fun skeleton(): Skeleton = if (rule == null) broken ?: Skeleton(null, emptyList()) else Skeleton(rule, children.map { it.skeleton() })
++
++    /**
++     * Replays [skeleton] from here, as Rodin reuses a proof: each saved rule is applied to the
++     * sequent it now meets. Where a rule no longer applies, the node is left open and the saved
++     * proof from there is kept as [broken].
++     * @return whether every rule applied
++     */
++    fun replay(skeleton: Skeleton): Boolean {
++        val saved = skeleton.rule ?: return true
++        if (!apply(saved)) {
++            prune()
++            broken = skeleton
++            return false
++        }
++        var complete = true
++        children.zip(skeleton.children).forEach { (child, s) -> complete = child.replay(s) && complete }
++        return complete
++    }
++}
++
++/** The rules of a proof tree, without its sequents: what Rodin calls a proof skeleton. */
++class Skeleton(val rule: Rule?, val children: List<Skeleton>)
++
++/** A proof of an obligation: its tree, with undo and redo. */
++class ProofTree(val po: ProofObligation) {
++    var root = ProofNode(Sequent.of(po))
++        private set
++    private val undo = ArrayDeque<Skeleton>()
++    private val redo = ArrayDeque<Skeleton>()
++
++    val confidence get() = root.confidence
++    val complete get() = root.isClosed
++
++    /** Records the tree before a change, for [undo]. */
++    fun remember() {
++        undo.addLast(root.skeleton())
++        if (undo.size > 200) undo.removeFirst()
++        redo.clear()
++    }
++
++    fun undo(): Boolean = restore(undo, redo)
++    fun redo(): Boolean = restore(redo, undo)
++
++    private fun restore(from: ArrayDeque<Skeleton>, to: ArrayDeque<Skeleton>): Boolean {
++        val skeleton = from.removeLastOrNull() ?: return false
++        to.addLast(root.skeleton())
++        load(skeleton)
++        return true
++    }
++
++    /** Rebuilds the tree from [skeleton]; whether every rule applied. */
++    fun load(skeleton: Skeleton): Boolean {
++        root = ProofNode(Sequent.of(po))
++        return root.replay(skeleton)
++    }
++
++    /**
++     * What Rodin stores as the proof's dependencies: the hypotheses of the obligation and the
++     * identifiers the rules use, and those they introduce.
++     */
++    fun dependencies(): Dependencies {
++        val used = LinkedHashSet<Predicate>()
++        val introduced = LinkedHashSet<String>()
++        var goalUsed = false
++        fun visit(node: ProofNode, goalUnchanged: Boolean) {
++            val rule = node.rule ?: return
++            if (rule.goal != null && goalUnchanged) goalUsed = true
++            rule.needed.filter { it in po.hypotheses.map { h -> h.predicate } }.forEach { used += it }
++            rule.antecedents.forEach { a -> a.idents.forEach { introduced += it.name } }
++            node.children.zip(rule.antecedents).forEach { (child, a) -> visit(child, goalUnchanged && a.goal == null) }
++        }
++        visit(root, true)
++        return Dependencies(if (goalUsed) po.goal else null, used, introduced)
++    }
++
++    class Dependencies(val goal: Predicate?, val hyps: Set<Predicate>, val introduced: Set<String>)
++}
++
++/** Every position of [formula], with its sub-formula, in pre-order. */
++fun positionsOf(formula: Formula<*>): List<Pair<org.eventb.core.ast.IPosition, Formula<*>>> {
++    val result = mutableListOf<Pair<org.eventb.core.ast.IPosition, Formula<*>>>()
++    fun walk(position: org.eventb.core.ast.IPosition, sub: Formula<*>) {
++        result += position to sub
++        for (i in 0 until sub.childCount) walk(position.getChildAtIndex(i), sub.getChild(i))
++    }
++    walk(org.eventb.core.ast.IPosition.ROOT, formula)
++    return result
++}
+diff --git a/src/main/kotlin/b/language/server/proBMangement/prob/Tactics.kt b/src/main/kotlin/b/language/server/proBMangement/prob/Tactics.kt
+new file mode 100644
+index 0000000..1952707
+--- /dev/null
++++ b/src/main/kotlin/b/language/server/proBMangement/prob/Tactics.kt
+@@ -0,0 +1,504 @@
++package b.language.server.proBMangement.prob
++
++import org.eventb.core.ast.AssociativeExpression
++import org.eventb.core.ast.AssociativePredicate
++import org.eventb.core.ast.BinaryExpression
++import org.eventb.core.ast.BinaryPredicate
++import org.eventb.core.ast.BoundIdentDecl
++import org.eventb.core.ast.Expression
++import org.eventb.core.ast.Formula
++import org.eventb.core.ast.FormulaFactory
++import org.eventb.core.ast.IPosition
++import org.eventb.core.ast.PowerSetType
++import org.eventb.core.ast.Predicate
++import org.eventb.core.ast.ProductType
++import org.eventb.core.ast.QuantifiedPredicate
++import org.eventb.core.ast.RelationalPredicate
++import org.eventb.core.ast.SetExtension
++import org.eventb.core.ast.Type
++import org.eventb.core.ast.UnaryExpression
++import org.eventb.core.ast.UnaryPredicate
++
++/** A tactic cannot be applied; the message says why. */
++class TacticException(message: String) : RuntimeException(message)
++
++/** Where a tactic applies: the goal, or a hypothesis, and a position in it for rewrites. */
++class Target(val hyp: Predicate?, val position: IPosition = IPosition.ROOT)
++
++/**
++ * The tactics of Rodin's Proof Control and its context menus on hypotheses and goal, each
++ * producing the rule of Rodin's reasoner of the same name.
++ */
++object Tactics {
++
++    private const val SEQPROVER = "org.eventb.core.seqprover"
++    const val PROB = "de.prob.eventb.disprover.core.disproverReasoner"
++
++    /** A tactic as offered in the proving panel. */
++    class Tactic(
++        /** The name used in commands, as `ah`. */
++        val name: String,
++        /** What Rodin's menus call it. */
++        val label: String,
++        /** Whether it applies to the goal, to a hypothesis, or both. */
++        val onGoal: Boolean,
++        val onHyp: Boolean,
++        /** What the user must type: an expression list, a predicate, or nothing. */
++        val input: String? = null,
++        /** Whether it applies at a sub-formula (a rewrite) rather than the whole predicate. */
++        val positional: Boolean = false,
++        val applicable: (Formula<*>) -> Boolean,
++        val make: (Sequent, Target, String?) -> Rule,
++    )
++
++    private fun conjuncts(p: Predicate): List<Predicate> =
++        if (p.tag == Formula.LAND) (p as AssociativePredicate).children.toList() else listOf(p)
++
++    private fun disjuncts(p: Predicate): List<Predicate> =
++        if (p.tag == Formula.LOR) (p as AssociativePredicate).children.toList() else listOf(p)
++
++    /** ¬p, without double negation, as Rodin's DLib.makeNeg. */
++    private fun FormulaFactory.not(p: Predicate): Predicate =
++        if (p.tag == Formula.NOT) (p as UnaryPredicate).child else makeUnaryPredicate(Formula.NOT, p, null)
++    private fun FormulaFactory.and(ps: List<Predicate>): Predicate = when (ps.size) {
++        0 -> makeLiteralPredicate(Formula.BTRUE, null)
++        1 -> ps[0]
++        else -> makeAssociativePredicate(Formula.LAND, ps, null)
++    }
++    private fun FormulaFactory.or(ps: List<Predicate>): Predicate =
++        if (ps.size == 1) ps[0] else makeAssociativePredicate(Formula.LOR, ps, null)
++    private fun FormulaFactory.rel(tag: Int, l: Expression, r: Expression): Predicate = makeRelationalPredicate(tag, l, r, null)
++    private fun FormulaFactory.imp(l: Predicate, r: Predicate): Predicate = makeBinaryPredicate(Formula.LIMP, l, r, null)
++
++    /** The well-definedness of [formulas], as conjuncts, without ⊤. */
++    private fun wd(formulas: List<Formula<*>>): List<Predicate> =
++        formulas.flatMap { conjuncts(it.wdPredicate) }.filter { it.tag != Formula.BTRUE }.distinct()
++
++    private fun hypOf(target: Target) = target.hyp ?: throw TacticException("this tactic applies to a hypothesis")
++
++    private fun parsePredicate(sequent: Sequent, text: String?): Predicate {
++        val source = text?.trim().orEmpty()
++        if (source.isEmpty()) throw TacticException("a predicate is needed")
++        val result = sequent.factory.parsePredicate(source, null)
++        if (result.hasProblem()) throw TacticException("cannot parse $source: ${result.problems.joinToString { it.toString() }}")
++        val predicate = result.parsedPredicate
++        val check = predicate.typeCheck(sequent.env)
++        if (check.hasProblem()) throw TacticException("cannot type $source: ${check.problems.joinToString { it.toString() }}")
++        if (!check.inferredEnvironment.isEmpty) throw TacticException("$source mentions unknown identifiers: ${check.inferredEnvironment.names.joinToString()}")
++        return predicate
++    }
++
++    /** Parses the comma-separated instantiations of [decls]; an empty entry leaves the identifier bound. */
++    private fun parseExpressions(sequent: Sequent, text: String?, decls: Array<BoundIdentDecl>): List<Expression?> {
++        val parts = splitTopLevel(text.orEmpty())
++        if (parts.size > decls.size) throw TacticException("${decls.size} bound identifier(s), ${parts.size} given")
++        return decls.mapIndexed { i, decl ->
++            val source = parts.getOrNull(i)?.trim().orEmpty()
++            if (source.isEmpty() || source == "_") return@mapIndexed null
++            val result = sequent.factory.parseExpression(source, null)
++            if (result.hasProblem()) throw TacticException("cannot parse $source: ${result.problems.joinToString { it.toString() }}")
++            val expression = result.parsedExpression
++            val check = expression.typeCheck(sequent.env, decl.type)
++            if (check.hasProblem()) throw TacticException("cannot type $source as ${decl.type}: ${check.problems.joinToString { it.toString() }}")
++            if (!check.inferredEnvironment.isEmpty) throw TacticException("$source mentions unknown identifiers: ${check.inferredEnvironment.names.joinToString()}")
++            expression
++        }.also { if (it.all { e -> e == null }) throw TacticException("instantiations are needed, as `x + 1, ∅`") }
++    }
++
++    /** Splits [text] at the commas outside brackets. */
++    private fun splitTopLevel(text: String): List<String> {
++        val parts = mutableListOf<String>()
++        var depth = 0
++        val current = StringBuilder()
++        for (c in text) {
++            when (c) {
++                '(', '{', '[' -> depth++
++                ')', '}', ']' -> depth--
++            }
++            if (c == ',' && depth == 0) { parts += current.toString(); current.clear() } else current.append(c)
++        }
++        if (current.isNotBlank() || parts.isNotEmpty()) parts += current.toString()
++        return parts
++    }
++
++    /** [quantified] with [values] for its bound identifiers; null values stay bound. */
++    private fun instantiate(quantified: QuantifiedPredicate, values: List<Expression?>): Predicate =
++        quantified.instantiate(values.toTypedArray(), quantified.factory)
++
++    // ----------------------------------------------------------------------
++    // Rules closing a sequent, also tried after every step, as Rodin's post-tactic
++
++    fun trueGoal(s: Sequent): Rule? = if (s.goal.tag == Formula.BTRUE) Rule("$SEQPROVER.trueGoal", "⊤ goal", s.goal, emptySet(), emptyList()) else null
++
++    fun falseHyp(s: Sequent): Rule? {
++        val bottom = s.factory.makeLiteralPredicate(Formula.BFALSE, null)
++        return if (s.contains(bottom)) Rule("$SEQPROVER.falseHyp", "⊥ hyp", null, setOf(bottom), emptyList()) else null
++    }
++
++    fun hyp(s: Sequent): Rule? = if (s.contains(s.goal)) Rule("$SEQPROVER.hyp", "hyp", s.goal, setOf(s.goal), emptyList()) else null
++
++    fun contrHyps(s: Sequent, hyp: Predicate? = null): Rule? {
++        for (h in hyp?.let { listOf(it) } ?: s.hyps.keys.toList()) {
++            val negated = s.factory.not(h)
++            if (s.contains(negated)) return Rule("$SEQPROVER.contrHyps:1", "ct in hyps ($h)", null, setOf(h, negated), emptyList())
++        }
++        return null
++    }
++
++    /** The rule closing [s] without a choice, if any. */
++    fun close(s: Sequent): Rule? = trueGoal(s) ?: falseHyp(s) ?: hyp(s) ?: contrHyps(s)
++
++    // ----------------------------------------------------------------------
++    // Inference rules
++
++    private fun impI(s: Sequent): Rule {
++        if (s.goal.tag != Formula.LIMP) throw TacticException("the goal is not an implication")
++        val goal = s.goal as BinaryPredicate
++        return Rule("$SEQPROVER.impI", "⇒ goal", s.goal, emptySet(), listOf(Antecedent(goal.right, conjuncts(goal.left))))
++    }
++
++    private fun allI(s: Sequent): Rule {
++        if (s.goal.tag != Formula.FORALL) throw TacticException("the goal is not universally quantified")
++        val goal = s.goal as QuantifiedPredicate
++        val fresh = s.env.makeBuilder().makeFreshIdentifiers(goal.boundIdentDecls).toList()
++        return Rule("$SEQPROVER.allI", "∀ goal (frees ${fresh.joinToString(",")})", s.goal, emptySet(),
++            listOf(Antecedent(instantiate(goal, fresh), idents = fresh)))
++    }
++
++    private fun conj(s: Sequent): Rule {
++        if (s.goal.tag != Formula.LAND) throw TacticException("the goal is not a conjunction")
++        return Rule("$SEQPROVER.conj:0", "∧ goal", s.goal, emptySet(), conjuncts(s.goal).map { Antecedent(it) })
++    }
++
++    private fun disjE(s: Sequent, hyp: Predicate): Rule {
++        val deselect = listOf(HypAction.Selection(HypAction.DESELECT, listOf(hyp)))
++        val cases: List<Predicate> = when {
++            hyp.tag == Formula.LOR -> disjuncts(hyp)
++            hyp.tag == Formula.IN && (hyp as RelationalPredicate).right.tag == Formula.BUNION ->
++                (hyp.right as AssociativeExpression).children.map { s.factory.rel(Formula.IN, hyp.left, it) }
++            hyp.tag == Formula.IN && (hyp as RelationalPredicate).right.tag == Formula.SETEXT && (hyp.right as SetExtension).members.size > 1 ->
++                (hyp.right as SetExtension).members.map { s.factory.rel(Formula.EQUAL, hyp.left, it) }
++            else -> throw TacticException("the hypothesis is not a disjunction")
++        }
++        return Rule("$SEQPROVER.disjE", "case distinction ($hyp)", null, setOf(hyp),
++            cases.map { Antecedent(null, conjuncts(it), actions = deselect) })
++    }
++
++    private fun exE(s: Sequent, hyp: Predicate): Rule {
++        if (hyp.tag != Formula.EXISTS) throw TacticException("the hypothesis is not existentially quantified")
++        val quantified = hyp as QuantifiedPredicate
++        val fresh = s.env.makeBuilder().makeFreshIdentifiers(quantified.boundIdentDecls).toList()
++        return Rule("$SEQPROVER.exE", "∃ hyp", s.goal, setOf(hyp), listOf(Antecedent(s.goal, conjuncts(instantiate(quantified, fresh)), idents = fresh,
++            actions = listOf(HypAction.Selection(HypAction.DESELECT, listOf(hyp))))))
++    }
++
++    private fun conjF(s: Sequent, hyp: Predicate): Rule {
++        if (hyp.tag != Formula.LAND) throw TacticException("the hypothesis is not a conjunction")
++        return Rule("$SEQPROVER.conjF", "∧ hyp ($hyp)", null, setOf(hyp), listOf(Antecedent(null, actions = listOf(
++            HypAction.Inference(HypAction.FORWARD_INF, listOf(hyp), emptyList(), conjuncts(hyp)),
++            HypAction.Selection(HypAction.HIDE, listOf(hyp))))))
++    }
++
++    private fun allD(s: Sequent, hyp: Predicate, text: String?): Rule {
++        if (hyp.tag != Formula.FORALL) throw TacticException("the hypothesis is not universally quantified")
++        val quantified = hyp as QuantifiedPredicate
++        val values = parseExpressions(s, text, quantified.boundIdentDecls)
++        val wds = wd(values.filterNotNull())
++        val instance = instantiate(quantified, values)
++        return Rule("$SEQPROVER.allD", "∀ hyp (inst ${values.joinToString(",") { it?.toString() ?: "" }})", null, setOf(hyp),
++            listOf(Antecedent(s.factory.and(wds)), Antecedent(null, wds + conjuncts(instance), wds,
++                actions = listOf(HypAction.Selection(HypAction.DESELECT, listOf(hyp))))),
++            inputs = listOf(RuleInput.Expressions("exprs", values)))
++    }
++
++    private fun exI(s: Sequent, text: String?): Rule {
++        if (s.goal.tag != Formula.EXISTS) throw TacticException("the goal is not existentially quantified")
++        val quantified = s.goal as QuantifiedPredicate
++        val values = parseExpressions(s, text, quantified.boundIdentDecls)
++        val wds = wd(values.filterNotNull())
++        return Rule("$SEQPROVER.exI", "∃ goal (inst ${values.joinToString(",") { it?.toString() ?: "" }})", s.goal, emptySet(),
++            listOf(Antecedent(s.factory.and(wds)), Antecedent(instantiate(quantified, values), wds)),
++            inputs = listOf(RuleInput.Expressions("exprs", values)))
++    }
++
++    private fun impE(s: Sequent, hyp: Predicate): Rule {
++        if (hyp.tag != Formula.LIMP) throw TacticException("the hypothesis is not an implication")
++        val implication = hyp as BinaryPredicate
++        val hide = listOf(HypAction.Selection(HypAction.HIDE, listOf(hyp)))
++        return Rule("$SEQPROVER.impE:2", "⇒ hyp mp ($hyp)", null, setOf(hyp),
++            listOf(Antecedent(implication.left, actions = hide), Antecedent(null, conjuncts(implication.right), actions = hide)))
++    }
++
++    private fun cut(s: Sequent, text: String?): Rule {
++        val lemma = parsePredicate(s, text)
++        val wds = wd(listOf(lemma))
++        return Rule("$SEQPROVER.cut", "ah ($lemma)", null, emptySet(),
++            listOf(Antecedent(s.factory.and(wds)), Antecedent(lemma, wds), Antecedent(null, wds + lemma)),
++            inputs = listOf(RuleInput.Predicates("pred", listOf(lemma))))
++    }
++
++    private fun doCase(s: Sequent, text: String?): Rule {
++        val case = parsePredicate(s, text)
++        return Rule("$SEQPROVER.doCase", "dc ($case)", null, emptySet(),
++            listOf(Antecedent(s.factory.and(wd(listOf(case)))), Antecedent(null, listOf(case)), Antecedent(null, listOf(s.factory.not(case)))),
++            inputs = listOf(RuleInput.Predicates("pred", listOf(case))))
++    }
++
++    private fun contr(s: Sequent, hyp: Predicate?): Rule {
++        val negatedGoal = conjuncts(s.factory.not(s.goal))
++        return if (hyp == null) {
++            Rule("$SEQPROVER.contr", "ct goal", s.goal, emptySet(), listOf(Antecedent(s.factory.makeLiteralPredicate(Formula.BFALSE, null), negatedGoal)))
++        } else {
++            Rule("$SEQPROVER.contr", "ct hyp ($hyp)", s.goal, setOf(hyp), listOf(Antecedent(s.factory.not(hyp), negatedGoal,
++                actions = listOf(HypAction.Selection(HypAction.DESELECT, listOf(hyp))))))
++        }
++    }
++
++    /** Replaces [from] by [to] everywhere in [p]. */
++    private fun replace(p: Predicate, from: Expression, to: Expression): Predicate {
++        var result = p
++        for ((position, _) in positionsOf(p).filter { (_, sub) -> sub == from }.reversed()) {
++            result = result.rewriteSubFormula(position, to)
++        }
++        return result
++    }
++
++    /** eh (left to right) and he (right to left): rewrites with an equality hypothesis. */
++    private fun eq(s: Sequent, hyp: Predicate, leftToRight: Boolean): Rule {
++        if (hyp.tag != Formula.EQUAL) throw TacticException("the hypothesis is not an equality")
++        val equality = hyp as RelationalPredicate
++        val (from, to) = if (leftToRight) equality.left to equality.right else equality.right to equality.left
++        val newGoal = replace(s.goal, from, to)
++        val actions = s.hyps.keys.filter { it != hyp }.mapNotNull { h ->
++            val rewritten = replace(h, from, to)
++            if (rewritten == h) null else HypAction.Inference(HypAction.REWRITE, listOf(h), emptyList(), listOf(rewritten), listOf(h))
++        }
++        if (newGoal == s.goal && actions.isEmpty()) throw TacticException("$from does not occur elsewhere")
++        val (id, name) = if (leftToRight) "eq:1" to "eh" else "he:1" to "he"
++        return Rule("$SEQPROVER.$id", "$name with $hyp", if (newGoal == s.goal) null else s.goal, setOf(hyp),
++            listOf(Antecedent(if (newGoal == s.goal) null else newGoal, actions = actions)))
++    }
++
++    private fun selection(s: Sequent, hyp: Predicate, type: String): Rule =
++        Rule("$SEQPROVER.mngHyp", "sl/ds", null, emptySet(), listOf(Antecedent(null, actions = listOf(HypAction.Selection(type, listOf(hyp))))))
++
++    /** Marks the node as reviewed: the user takes its correctness for granted. */
++    fun review(s: Sequent): Rule {
++        val confidence = Confidence.REVIEWED_MAX
++        return Rule("$SEQPROVER.review", "rv ($confidence)", s.goal, s.hyps.filterValues { it == HypState.SELECTED }.keys, emptyList(), confidence)
++    }
++
++    /** ProB found no counterexample to the sequent, with all its hypotheses. */
++    fun prob(s: Sequent, used: Set<Predicate>): Rule =
++        Rule(PROB, "ProB (no enumeration / all cases checked)", s.goal, used, emptyList())
++
++    // ----------------------------------------------------------------------
++    // Rewrites at a position, as Rodin's manual rewriters
++
++    /**
++     * A rewrite at a position: [rewrite] gives the new sub-formula. On the goal, each conjunct
++     * of the result becomes a goal; on a hypothesis, the result replaces it.
++     */
++    private fun rewriteRule(s: Sequent, target: Target, id: String, what: String, rewrite: (Formula<*>) -> Formula<*>?): Rule {
++        val pred = target.hyp ?: s.goal
++        val sub = pred.getSubFormula(target.position) ?: throw TacticException("no sub-formula at ${target.position}")
++        val replacement = rewrite(sub) ?: throw TacticException("cannot $what in $sub")
++        val result = pred.rewriteSubFormula(target.position, replacement)
++        val input = listOf(RuleInput.Text("pos", target.position.toString()))
++        val hyp = target.hyp
++        return if (hyp == null) {
++            Rule("$SEQPROVER.$id", "$what in goal", s.goal, emptySet(), conjuncts(result).map { Antecedent(it) }, inputs = input)
++        } else {
++            val inferred = conjuncts(result).filter { it.tag != Formula.BTRUE }
++            val actions = if (inferred.isEmpty()) listOf(HypAction.Selection(HypAction.HIDE, listOf(hyp)))
++            else listOf(HypAction.Inference(HypAction.REWRITE, listOf(hyp), emptyList(), inferred, listOf(hyp)), HypAction.Selection(HypAction.SELECT, inferred))
++            Rule("$SEQPROVER.$id", "$what in $sub", null, setOf(hyp), listOf(Antecedent(null, actions = actions)), inputs = input)
++        }
++    }
++
++    /** rn: pushes a negation inwards. */
++    private fun removeNegation(sub: Formula<*>): Formula<*>? {
++        if (sub.tag != Formula.NOT) return null
++        val ff = sub.factory
++        val child = (sub as UnaryPredicate).child
++        return when (child.tag) {
++            Formula.LAND -> ff.or(conjuncts(child).map { ff.not(it) })
++            Formula.LOR -> ff.and(disjuncts(child).map { ff.not(it) })
++            Formula.NOT -> (child as UnaryPredicate).child
++            Formula.LIMP -> (child as BinaryPredicate).let { ff.and(listOf(it.left, ff.not(it.right))) }
++            Formula.BTRUE -> ff.makeLiteralPredicate(Formula.BFALSE, null)
++            Formula.BFALSE -> ff.makeLiteralPredicate(Formula.BTRUE, null)
++            Formula.FORALL, Formula.EXISTS -> (child as QuantifiedPredicate).let {
++                ff.makeQuantifiedPredicate(if (child.tag == Formula.FORALL) Formula.EXISTS else Formula.FORALL, it.boundIdentDecls, ff.not(it.predicate), null)
++            }
++            else -> null
++        }
++    }
++
++    /** A bound identifier of type [type] at de Bruijn index [index]. */
++    private fun bound(ff: FormulaFactory, index: Int, type: Type) = ff.makeBoundIdentifier(index, null, type)
++
++    /** rm: rewrites a membership by the definition of the set. */
++    private fun removeMembership(sub: Formula<*>): Formula<*>? {
++        if (sub.tag != Formula.IN) return null
++        val ff = sub.factory
++        val element = (sub as RelationalPredicate).left
++        val set = sub.right
++        fun member(e: Expression, s: Expression) = ff.rel(Formula.IN, e, s)
++        return when (set.tag) {
++            Formula.BUNION -> ff.or((set as AssociativeExpression).children.map { member(element, it) })
++            Formula.BINTER -> ff.and((set as AssociativeExpression).children.map { member(element, it) })
++            Formula.SETMINUS -> (set as BinaryExpression).let { ff.and(listOf(member(element, it.left), ff.not(member(element, it.right)))) }
++            Formula.POW -> ff.rel(Formula.SUBSETEQ, element, (set as UnaryExpression).child)
++            Formula.POW1 -> ff.and(listOf(ff.rel(Formula.SUBSETEQ, element, (set as UnaryExpression).child),
++                ff.not(ff.rel(Formula.EQUAL, element, ff.makeEmptySet(element.type, null)))))
++            Formula.SETEXT -> ff.or((set as SetExtension).members.map { ff.rel(Formula.EQUAL, element, it) }.ifEmpty { return ff.makeLiteralPredicate(Formula.BFALSE, null) })
++            Formula.EMPTYSET -> ff.makeLiteralPredicate(Formula.BFALSE, null)
++            Formula.UPTO -> (set as BinaryExpression).let { ff.and(listOf(ff.rel(Formula.LE, it.left, element), ff.rel(Formula.LE, element, it.right))) }
++            Formula.NATURAL -> ff.rel(Formula.LE, ff.makeIntegerLiteral(java.math.BigInteger.ZERO, null), element)
++            Formula.NATURAL1 -> ff.rel(Formula.LE, ff.makeIntegerLiteral(java.math.BigInteger.ONE, null), element)
++            Formula.CONVERSE -> if (element.tag == Formula.MAPSTO) (element as BinaryExpression).let {
++                member(ff.makeBinaryExpression(Formula.MAPSTO, it.right, it.left, null), (set as UnaryExpression).child)
++            } else null
++            Formula.CPROD -> if (element.tag == Formula.MAPSTO) {
++                val pair = element as BinaryExpression
++                val product = set as BinaryExpression
++                ff.and(listOf(member(pair.left, product.left), member(pair.right, product.right)))
++            } else null
++            Formula.KDOM, Formula.KRAN -> {
++                // x ∈ dom(r) ⇔ ∃y·x ↦ y ∈ r, and x ∈ ran(r) ⇔ ∃y·y ↦ x ∈ r
++                val relation = (set as UnaryExpression).child
++                val types = relation.type.source to relation.type.target
++                val otherType = if (set.tag == Formula.KDOM) types.second else types.first
++                val decl = ff.makeBoundIdentDecl(if (set.tag == Formula.KDOM) "y" else "x", null, otherType)
++                val y = bound(ff, 0, otherType)
++                val e = element.shiftBoundIdentifiers(1)
++                val pair = if (set.tag == Formula.KDOM) ff.makeBinaryExpression(Formula.MAPSTO, e, y, null) else ff.makeBinaryExpression(Formula.MAPSTO, y, e, null)
++                ff.makeQuantifiedPredicate(Formula.EXISTS, arrayOf(decl), member(pair, relation.shiftBoundIdentifiers(1)), null)
++            }
++            Formula.RELIMAGE -> {
++                // y ∈ r[S] ⇔ ∃x·x ∈ S ∧ x ↦ y ∈ r
++                val image = set as BinaryExpression
++                val sourceType = image.left.type.source
++                val decl = ff.makeBoundIdentDecl("x", null, sourceType)
++                val x = bound(ff, 0, sourceType)
++                ff.makeQuantifiedPredicate(Formula.EXISTS, arrayOf(decl), ff.and(listOf(
++                    member(x, image.right.shiftBoundIdentifiers(1)),
++                    member(ff.makeBinaryExpression(Formula.MAPSTO, x, element.shiftBoundIdentifiers(1), null), image.left.shiftBoundIdentifiers(1)))), null)
++            }
++            else -> null
++        }
++    }
++
++    private val Type.source: Type get() = ((this as PowerSetType).baseType as ProductType).left
++    private val Type.target: Type get() = ((this as PowerSetType).baseType as ProductType).right
++
++    /** ri: A ⊆ B ⇔ ∀x·x ∈ A ⇒ x ∈ B. */
++    private fun removeInclusion(sub: Formula<*>): Formula<*>? {
++        if (sub.tag != Formula.SUBSETEQ) return null
++        val ff = sub.factory
++        val inclusion = sub as RelationalPredicate
++        val type = (inclusion.left.type as PowerSetType).baseType
++        val x = bound(ff, 0, type)
++        return ff.makeQuantifiedPredicate(Formula.FORALL, arrayOf(ff.makeBoundIdentDecl("x", null, type)),
++            ff.imp(ff.rel(Formula.IN, x, inclusion.left.shiftBoundIdentifiers(1)), ff.rel(Formula.IN, x, inclusion.right.shiftBoundIdentifiers(1))), null)
++    }
++
++    /** Set equality as two inclusions. */
++    private fun setEquality(sub: Formula<*>): Formula<*>? {
++        if (sub.tag != Formula.EQUAL || (sub as RelationalPredicate).left.type !is PowerSetType) return null
++        val ff = sub.factory
++        return ff.and(listOf(ff.rel(Formula.SUBSETEQ, sub.left, sub.right), ff.rel(Formula.SUBSETEQ, sub.right, sub.left)))
++    }
++
++    /** P ⇔ Q as two implications. */
++    private fun equivalence(sub: Formula<*>): Formula<*>? {
++        if (sub.tag != Formula.LEQV) return null
++        val ff = sub.factory
++        val eqv = sub as BinaryPredicate
++        return ff.and(listOf(ff.imp(eqv.left, eqv.right), ff.imp(eqv.right, eqv.left)))
++    }
++
++    /**
++     * funOvr: a case distinction on (f  g)(x): x ∈ dom(g) gives g(x), x ∉ dom(g) gives f(x).
++     */
++    private fun funOvr(s: Sequent, target: Target): Rule {
++        val pred = target.hyp ?: s.goal
++        val sub = pred.getSubFormula(target.position) as? BinaryExpression
++        if (sub == null || sub.tag != Formula.FUNIMAGE || sub.left.tag != Formula.OVR) throw TacticException("not an application of an overriding")
++        if (sub.boundIdentifiers.isNotEmpty()) throw TacticException("the application mentions bound identifiers")
++        val ff = s.factory
++        val override = sub.left as AssociativeExpression
++        val last = override.children.last()
++        val rest = if (override.children.size == 2) override.children[0] else ff.makeAssociativeExpression(Formula.OVR, override.children.dropLast(1), null)
++        val inDomain = ff.rel(Formula.IN, sub.right, ff.makeUnaryExpression(Formula.KDOM, last, null))
++        val cases = listOf(inDomain to last, ff.not(inDomain) to rest)
++        val input = listOf(RuleInput.Text("pos", target.position.toString()))
++        val hyp = target.hyp
++        return if (hyp == null) {
++            Rule("$SEQPROVER.funOvr:1", "ovr", s.goal, emptySet(), cases.map { (case, f) ->
++                Antecedent(pred.rewriteSubFormula(target.position, ff.makeBinaryExpression(Formula.FUNIMAGE, f, sub.right, null)), listOf(case))
++            }, inputs = input)
++        } else {
++            Rule("$SEQPROVER.funOvr:1", "ovr", null, setOf(hyp), cases.map { (case, f) ->
++                val rewritten = pred.rewriteSubFormula(target.position, ff.makeBinaryExpression(Formula.FUNIMAGE, f, sub.right, null))
++                Antecedent(null, listOf(case), actions = listOf(
++                    HypAction.Inference(HypAction.REWRITE, listOf(hyp), emptyList(), listOf(rewritten), listOf(hyp))))
++            }, inputs = input)
++        }
++    }
++
++    private fun rewrite(name: String, label: String, id: String, what: String, f: (Formula<*>) -> Formula<*>?) = Tactic(
++        name, label, onGoal = true, onHyp = true, positional = true, applicable = { f(it) != null },
++        make = { s, t, _ -> rewriteRule(s, t, id, what, f) })
++
++    /** Every tactic, in the order of Rodin's menus. */
++    val all: List<Tactic> = listOf(
++        Tactic("impI", "⇒ goal: assume the left side", true, false, applicable = { it.tag == Formula.LIMP }) { s, _, _ -> impI(s) },
++        Tactic("allI", "∀ goal: free the bound identifiers", true, false, applicable = { it.tag == Formula.FORALL }) { s, _, _ -> allI(s) },
++        Tactic("conj", "∧ goal: prove each conjunct", true, false, applicable = { it.tag == Formula.LAND }) { s, _, _ -> conj(s) },
++        Tactic("exI", "∃ goal: instantiate", true, false, input = "instantiations, as `1, ∅`", applicable = { it.tag == Formula.EXISTS }) { s, _, i -> exI(s, i) },
++        Tactic("disjE", "case distinction", false, true, applicable = {
++            it.tag == Formula.LOR || (it.tag == Formula.IN && ((it as RelationalPredicate).right.tag == Formula.BUNION ||
++                (it.right.tag == Formula.SETEXT && (it.right as SetExtension).members.size > 1)))
++        }) { s, t, _ -> disjE(s, hypOf(t)) },
++        Tactic("conjF", "∧ hyp: split", false, true, applicable = { it.tag == Formula.LAND }) { s, t, _ -> conjF(s, hypOf(t)) },
++        Tactic("exE", "∃ hyp: free the bound identifiers", false, true, applicable = { it.tag == Formula.EXISTS }) { s, t, _ -> exE(s, hypOf(t)) },
++        Tactic("allD", "∀ hyp: instantiate", false, true, input = "instantiations, as `1, ∅`", applicable = { it.tag == Formula.FORALL }) { s, t, i -> allD(s, hypOf(t), i) },
++        Tactic("impE", "⇒ hyp: modus ponens", false, true, applicable = { it.tag == Formula.LIMP }) { s, t, _ -> impE(s, hypOf(t)) },
++        Tactic("eh", "eh: rewrite left to right everywhere", false, true, applicable = { it.tag == Formula.EQUAL }) { s, t, _ -> eq(s, hypOf(t), true) },
++        Tactic("he", "he: rewrite right to left everywhere", false, true, applicable = { it.tag == Formula.EQUAL }) { s, t, _ -> eq(s, hypOf(t), false) },
++        Tactic("ct", "ct: contradict", true, true, applicable = { true }) { s, t, _ -> contr(s, t.hyp) },
++        Tactic("ah", "ah: add a hypothesis", true, false, input = "a predicate to prove first", applicable = { true }) { s, _, i -> cut(s, i) },
++        Tactic("dc", "dc: case distinction on a predicate", true, false, input = "the predicate distinguishing the cases", applicable = { true }) { s, _, i -> doCase(s, i) },
++        rewrite("rn", "remove ¬", "rn", "remove ¬", ::removeNegation),
++        rewrite("rm", "remove ∈", "rm", "remove ∈", ::removeMembership),
++        rewrite("ri", "remove ⊆", "ri", "remove ⊆", ::removeInclusion),
++        rewrite("setEql", "set equality as ⊆ both ways", "setEqlRewrites", "rewrites set equality", ::setEquality),
++        rewrite("eqv", "⇔ as ⇒ both ways", "eqvRewrites", "rewrites equivalence", ::equivalence),
++        Tactic("funOvr", "function overriding: case distinction", true, true, positional = true, applicable = {
++            it.tag == Formula.FUNIMAGE && (it as BinaryExpression).left.tag == Formula.OVR && it.boundIdentifiers.isEmpty()
++        }) { s, t, _ -> funOvr(s, t) },
++        Tactic("select", "select", false, true, applicable = { true }) { s, t, _ -> selection(s, hypOf(t), HypAction.SELECT) },
++        Tactic("deselect", "deselect", false, true, applicable = { true }) { s, t, _ -> selection(s, hypOf(t), HypAction.DESELECT) },
++        Tactic("hide", "hide", false, true, applicable = { true }) { s, t, _ -> selection(s, hypOf(t), HypAction.HIDE) },
++        Tactic("show", "show", false, true, applicable = { true }) { s, t, _ -> selection(s, hypOf(t), HypAction.SHOW) },
++    )
++
++    fun named(name: String) = all.firstOrNull { it.name == name } ?: throw TacticException("unknown tactic $name")
++
++    /** The tactics applying to [predicate] (the goal if [onGoal]), with their positions. */
++    fun applicable(predicate: Predicate, onGoal: Boolean): List<Pair<Tactic, IPosition>> {
++        val result = mutableListOf<Pair<Tactic, IPosition>>()
++        val positions = positionsOf(predicate)
++        for (tactic in all) {
++            if (if (onGoal) !tactic.onGoal else !tactic.onHyp) continue
++            if (tactic.positional) {
++                positions.filter { (_, sub) -> runCatching { tactic.applicable(sub) }.getOrDefault(false) }.forEach { (p, _) -> result += tactic to p }
++            } else if (tactic.applicable(predicate)) {
++                result += tactic to IPosition.ROOT
++            }
++        }
++        return result
++    }
++}

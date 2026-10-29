@@ -28,6 +28,7 @@ M.config = {
     group = '<localleader>',
     animate = '<localleader>a',
     symbol = '<localleader>s',
+    prove = '<localleader>p',
   },
   -- Graphs and the graphical animation of the animation panel, as in ProB Tcl/Tk.
   visualization = {
@@ -113,6 +114,10 @@ local function enable_lsp()
   vim.lsp.commands['prob.animate.open'] = function(_, ctx)
     require('prob.animate').start(ctx.bufnr)
   end
+  -- The "ProB: prove interactively" code action opens the proof panel.
+  vim.lsp.commands['prob.prove.open'] = function(_, ctx)
+    require('prob.prove').start(nil, ctx.bufnr)
+  end
   vim.lsp.enable('prob')
 end
 
@@ -142,6 +147,12 @@ function M.animate()
   require('prob.animate').start()
 end
 
+--- Proves the proof obligation `name`, or the one at the cursor, interactively.
+---@param name? string
+function M.prove(name)
+  require('prob.prove').start(name)
+end
+
 --- Sets the configured mappings in `buf`, and names their group for which-key.
 local function map_keys(buf, filetype)
   local keys = M.config.keys or {}
@@ -153,6 +164,9 @@ local function map_keys(buf, filetype)
   map(keys.animate, M.animate, 'Animate with ProB')
   if filetype == 'eventb' then
     map(keys.symbol, M.pick_symbol, 'Insert an Event-B symbol')
+    map(keys.prove, function()
+      M.prove()
+    end, 'Prove interactively')
   end
   local ok, wk = pcall(require, 'which-key')
   if ok and keys.group then
@@ -202,6 +216,20 @@ function M.enable()
   vim.api.nvim_create_user_command('ProbAnimateStop', function()
     require('prob.animate').stop()
   end, { desc = 'Stop the ProB animation' })
+  vim.api.nvim_create_user_command('ProbProve', function(args)
+    M.prove(args.args ~= '' and args.args or nil)
+  end, {
+    nargs = '?',
+    desc = 'Prove a proof obligation interactively',
+    complete = function(lead)
+      return vim.tbl_filter(function(name)
+        return vim.startswith(name, lead)
+      end, require('prob.prove').names())
+    end,
+  })
+  vim.api.nvim_create_user_command('ProbProveStop', function()
+    require('prob.prove').stop()
+  end, { desc = 'Close the proof panel' })
 end
 
 ---@param opts? prob.Config

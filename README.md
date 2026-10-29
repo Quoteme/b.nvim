@@ -175,9 +175,9 @@ Install Java 17+, [Graphviz](https://graphviz.org/) and
 manager or from the download page, and put `probcli` on your `$PATH`.
 
 The language server needs the patches in `nix/b-language-server/`:
-`client-compat.patch` (stdio transport and Neovim fixes) and
-`eventb-camille.patch` (Event-B support, animation and hover). Build it with
-Gradle:
+`client-compat.patch` (stdio transport and Neovim fixes),
+`eventb-camille.patch` (Event-B support, animation and hover) and
+`eventb-proving.patch` (interactive proofs). Build it with Gradle:
 
 ```sh
 git clone https://github.com/hhu-stups/b-language-server
@@ -185,6 +185,7 @@ cd b-language-server
 git checkout 16595180e7e02666d0544d6b554715637c3a7ca4
 git apply /path/to/b.nvim/nix/b-language-server/client-compat.patch
 git apply /path/to/b.nvim/nix/b-language-server/eventb-camille.patch
+git apply /path/to/b.nvim/nix/b-language-server/eventb-proving.patch
 mkdir -p src/main/resources/hover
 cp /path/to/b.nvim/nix/b-language-server/hover/*.tsv src/main/resources/hover/
 ./gradlew shadowJar
@@ -215,12 +216,13 @@ the repository into `~/.vim/pack/plugins/start/`. Vim only needs `probcli`.
 Open a B file. Problems appear as diagnostics when you open or save it (in
 Vim: in the quickfix list). Try [`examples/Lift.mch`](examples/Lift.mch).
 
-| Key              | Action                                                                  |
-| ---------------- | ----------------------------------------------------------------------- |
-| `K`              | hover: documentation, examples, types and proof obligations             |
-| `gra`            | code actions: model check, discharge or list proof obligations, animate |
-| `<localleader>a` | animate the machine (`:ProbAnimate`)                                    |
-| `<localleader>s` | insert an Event-B symbol (`:ProbSymbol`)                                |
+| Key              | Action                                                                         |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `K`              | hover: documentation, examples, types and proof obligations                    |
+| `gra`            | code actions: model check, discharge, list or prove proof obligations, animate |
+| `<localleader>a` | animate the machine (`:ProbAnimate`)                                           |
+| `<localleader>s` | insert an Event-B symbol (`:ProbSymbol`)                                       |
+| `<localleader>p` | prove the proof obligation at the cursor (`:ProbProve [name]`)                 |
 
 ### Event-B
 
@@ -262,6 +264,41 @@ panel that opens. Values changed by the last step are marked `*`.
 | `v` / `I`       | visualisations: graphs, tables, graphical animation, [VisB](https://prob.hhu.de/w/index.php?title=VisB) |
 | `R` / `q` / `?` | restart / quit / all keys                                                                               |
 
+### Proving
+
+The proof obligations ProB cannot discharge can be proved interactively, as in
+Rodin's Proving perspective. Press `<localleader>p` on an event, invariant,
+guard or axiom (or run `:ProbProve inc/inv1/INV`): a panel shows the proof
+tree, the hypotheses and the goal of the current node. The operators a tactic
+applies to are marked, as Rodin marks them in red; `⏎` on one lists its
+tactics. Like Lean's infoview, the panel follows the cursor to the obligation
+under it, unless a proof is under way.
+
+| Key              | In the panel                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| `⏎`              | on a hypothesis or the goal: its tactics (at the operator under the cursor); on the tree: go to the node |
+| `p` / `a`        | prove the current node / all open goals with ProB                                                        |
+| `t`              | type a tactic: `ah P`, `dc P`, `ct`, `exI e`, `allD e` (on a hypothesis), `rm`, …                        |
+| `s` / `H`        | select or deselect a hypothesis / show all hypotheses                                                    |
+| `x` / `r`        | prune the tree at the node / review it (accept without proof)                                            |
+| `u` / `<C-r>`    | undo / redo                                                                                              |
+| `]g` / `[g`      | next / previous open goal                                                                                |
+| `o` / `f` / `gd` | open another obligation / follow the cursor on or off / show where a hypothesis comes from               |
+| `q` / `?`        | close / all keys                                                                                         |
+
+The tactics are Rodin's: `⇒`, `∀` and `∧` goal, case distinction, `∧`, `∃`
+and `∀` hypothesis, modus ponens, `eh`/`he`, `ct`, `ah`, `dc`, and the rewrites
+remove `¬`, `∈` and `⊆`, set equality, `⇔` and function overriding. After every
+step, goals that are a hypothesis, `⊤`, or follow from `⊥` or contradicting
+hypotheses are closed, as by Rodin's post-tactic.
+
+Every step is saved at once in Rodin's own files next to the model: the proofs
+in `<component>.bpr`, their status in `<component>.bps`. When the model is
+saved, the proofs are replayed as Rodin replays them; a proof whose steps no
+longer apply is marked broken (`⚠`) and kept. Once the component is imported
+into Rodin, Rodin reuses these proofs, and proofs made in Rodin are replayed
+here. Steps ProB took are recorded as the reasoner of ProB's Rodin plugin.
+
 ## Configuration
 
 Neovim, all optional:
@@ -282,7 +319,12 @@ require('prob').setup({
   },
   treesitter = true, -- false keeps the regex syntax
   keyboard = true, -- false keeps ASCII combinations as typed in Event-B
-  keys = { group = '<localleader>', animate = '<localleader>a', symbol = '<localleader>s' }, -- false disables one
+  keys = { -- false disables one
+    group = '<localleader>',
+    animate = '<localleader>a',
+    symbol = '<localleader>s',
+    prove = '<localleader>p',
+  },
   visualization = {
     format = 'svg', -- what Graphviz renders graphs to: svg, pdf, png, …
     open = nil, -- function(path) to open a rendered file; default vim.ui.open
@@ -314,7 +356,8 @@ tree-sitter CLI, plus:
 The grammars live in `tree-sitter-b/` and `tree-sitter-eventb/`; run
 `tree-sitter generate --js-runtime native` and `tree-sitter test` there after
 changing `grammar.js`. The Event-B checks, animation and hover are a patch to
-the language server, `nix/b-language-server/eventb-camille.patch`. The hover
+the language server, `nix/b-language-server/eventb-camille.patch`; interactive
+proofs are a second patch on top of it, `eventb-proving.patch`. The hover
 texts for operators and keywords are generated from the official documentation
 by `python3 nix/b-language-server/hover/generate.py`; the signatures and
 examples are in `nix/b-language-server/hover/examples.tsv`, and the specs check

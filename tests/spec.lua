@@ -204,6 +204,139 @@ local function animate(spec)
   return errors
 end
 
+local proof = require('prob.prove')
+
+--- Sends one request to the proof panel and waits for the new view.
+local function proof_request(args)
+  local before = proof.view()
+  proof.action('request', args)
+  if not vim.wait(120000, function() return not proof.busy() and proof.view() ~= before end, 50) then
+    error('timed out waiting for ' .. args.action)
+  end
+  return proof.view()
+end
+
+local function open_proof(name)
+  proof.start(name)
+  if not vim.wait(120000, function() return proof.view() ~= nil and not proof.busy() end, 50) then
+    error('timed out opening ' .. name)
+  end
+  return proof.view()
+end
+
+--- Compares the open proof with what a proof spec expects.
+local function check_proof(view, expected, errors, what)
+  local function fail(text)
+    table.insert(errors, what .. text)
+  end
+  if expected.status and view.status ~= expected.status then
+    fail(('status: expected %s, got %s'):format(expected.status, tostring(view.status)))
+  end
+  if expected.remaining then
+    local open = #vim.tbl_filter(function(n) return n.open end, view.tree or {})
+    if open ~= expected.remaining then
+      fail(('open goals: expected %d, got %d'):format(expected.remaining, open))
+    end
+  end
+  if expected.broken then
+    local broken = #vim.tbl_filter(function(n) return n.broken end, view.tree or {})
+    if broken ~= expected.broken then
+      fail(('broken nodes: expected %d, got %d'):format(expected.broken, broken))
+    end
+  end
+  local displays = vim.tbl_map(function(n) return n.display end, view.tree or {})
+  for _, want in ipairs(expected.nodes or {}) do
+    if not vim.tbl_contains(displays, want) then
+      fail(('no node %q in the tree: %s'):format(want, table.concat(displays, ' | ')))
+    end
+  end
+  if expected.goal and (view.goal or {}).text ~= expected.goal then
+    fail(('goal: expected %s, got %s'):format(expected.goal, (view.goal or {}).text))
+  end
+  for _, want in ipairs(expected.hyps or {}) do
+    local found = vim.tbl_filter(function(h) return h.text == want end, view.hyps or {})
+    if #found == 0 then
+      fail(('no hypothesis %s among %s'):format(want, table.concat(vim.tbl_map(function(h) return h.text end, view.hyps or {}), ', ')))
+    end
+  end
+  if expected.message and not (view.message or ''):find(expected.message, 1, true) then
+    fail(('message: expected %q in %q'):format(expected.message, view.message or ''))
+  end
+end
+
+--- Runs the tactics of a proof spec on its obligation and checks the proof and its .bpr file.
+--- Each step is a tactic, `{ 'allD', hyp = '∀x', input = '1' }`, at the hypothesis `hyp`, or the
+--- first containing it (else the goal), and at the sub-formula whose menu entry contains `where`, or an
+--- action, `{ action = 'prob' }`.
+local function prove(spec, dir)
+  local view = open_proof(spec.prove)
+  if view.error then
+    return { view.error }
+  end
+  local errors = {}
+  if view.name ~= spec.prove then
+    return { ('opened %s, not %s'):format(tostring(view.name), spec.prove) }
+  end
+  for _, step in ipairs(spec.tactics or {}) do
+    if step.action then
+      view = proof_request(vim.deepcopy(step))
+    else
+      local pred, hyp = view.goal, nil
+      if step.hyp then
+        -- The hypothesis written exactly, else the first one containing the text.
+        for _, h in ipairs(view.hyps or {}) do
+          if h.text == step.hyp or (not hyp and h.text:find(step.hyp, 1, true)) then
+            pred, hyp = h, h.id
+          end
+        end
+        if not hyp then
+          return { ('%s: no hypothesis containing %s'):format(step[1], step.hyp) }
+        end
+      end
+      local position
+      for _, t in ipairs(pred.tactics or {}) do
+        if t.name == step[1] and (not step.where or t.label:find(step.where, 1, true)) then
+          position = t.position
+          break
+        end
+      end
+      view = proof_request({ action = 'apply', tactic = step[1], hyp = hyp, position = position, input = step.input })
+      if (view.message or '') ~= '' and not step.fails then
+        return { ('%s: %s'):format(step[1], view.message) }
+      end
+    end
+  end
+  check_proof(view, spec, errors, '')
+
+  local bpr = table.concat(vim.fn.readfile(dir .. '/' .. vim.fn.fnamemodify(spec.open or next(spec.files), ':r') .. '.bpr'), '\n')
+  for _, want in ipairs(spec.bpr or {}) do
+    if not bpr:find(want, 1, true) then
+      table.insert(errors, ('.bpr lacks %q'):format(want))
+    end
+  end
+
+  -- Saving the model checks it again, replaying the saved proof.
+  if spec.after then
+    proof.stop()
+    local source = vim.fn.bufnr(dir .. '/' .. (spec.open or next(spec.files)))
+    vim.api.nvim_set_current_buf(source)
+    if spec.after.replace then
+      local text = table.concat(vim.api.nvim_buf_get_lines(source, 0, -1, false), '\n')
+      text = text:gsub(vim.pesc(spec.after.replace[1]), (spec.after.replace[2]:gsub('%%', '%%%%')))
+      vim.api.nvim_buf_set_lines(source, 0, -1, false, vim.split(text, '\n', { plain = true }))
+    end
+    done = false
+    vim.cmd('silent write')
+    await('the language server')
+    local missing, extra = compare(spec.after.expect or {}, problems(dir))
+    vim.list_extend(errors, vim.tbl_map(function(l) return 'after saving, missing: ' .. l end, missing))
+    vim.list_extend(errors, vim.tbl_map(function(l) return 'after saving, unexpected: ' .. l end, extra))
+    check_proof(open_proof(spec.prove), spec.after, errors, 'after saving, ')
+  end
+  proof.stop()
+  return errors
+end
+
 --- The examples of the hover documentation in `language` that must be true.
 local function examples(language)
   local path = vim.fs.dirname(vim.fs.dirname(vim.fs.normalize(root))) .. '/nix/b-language-server/hover/examples.tsv'
@@ -300,6 +433,13 @@ local function run(spec)
 
   if spec.steps then
     return animate(spec)
+  end
+  if spec.prove then
+    local errors = prove(spec, dir)
+    vim.diagnostic.reset()
+    vim.cmd('silent! %bwipeout!')
+    vim.fn.delete(dir, 'rf')
+    return errors
   end
   if spec.hover then
     local client = vim.lsp.get_clients({ bufnr = 0, name = 'prob' })[1]

@@ -63,27 +63,8 @@ local keys = {
 -- ---------------------------------------------------------------------------
 -- Rendering
 
----@class prob.Line
----@field text string
----@field marks {[1]: integer, [2]: integer, [3]: string}[] column ranges and highlight groups
----@field item? table
-
-local function line(item)
-  return { text = '', marks = {}, item = item }
-end
-
---- Appends `text` to `l`, highlighted with `group`.
-local function put(l, text, group)
-  if group then
-    table.insert(l.marks, { #l.text, #l.text + #text, group })
-  end
-  l.text = l.text .. text
-  return l
-end
-
-local function pad(text, width)
-  return text .. string.rep(' ', math.max(1, width - vim.fn.strdisplaywidth(text)))
-end
+local panel = require('prob.panel')
+local line, put, pad = panel.line, panel.put, panel.pad
 
 --- The name of a visualisation, without the "..." of ProB Tcl/Tk's menu entries.
 local function label(v)
@@ -319,22 +300,7 @@ local function render()
   if not session or not session.buf or not vim.api.nvim_buf_is_valid(session.buf) then
     return
   end
-  local lines = render_lines(session.view or {})
-  session.items = {}
-  local text = {}
-  for i, l in ipairs(lines) do
-    text[i] = l.text
-    session.items[i] = l.item
-  end
-  vim.bo[session.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(session.buf, 0, -1, false, text)
-  vim.bo[session.buf].modifiable = false
-  vim.api.nvim_buf_clear_namespace(session.buf, panel_ns, 0, -1)
-  for i, l in ipairs(lines) do
-    for _, m in ipairs(l.marks) do
-      vim.api.nvim_buf_set_extmark(session.buf, panel_ns, i - 1, m[1], { end_col = m[2], hl_group = m[3] })
-    end
-  end
+  session.items = panel.draw(session.buf, panel_ns, render_lines(session.view or {}))
   annotate(session.view)
 end
 
@@ -618,30 +584,7 @@ local actions = {
 -- The panel
 
 local function open_panel()
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].buftype = 'nofile'
-  vim.bo[buf].bufhidden = 'wipe'
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = 'probanimation'
-  vim.api.nvim_buf_set_name(buf, 'ProB animation')
-
-  vim.cmd('botright vertical 46split')
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, buf)
-  for option, value in pairs({
-    number = false,
-    relativenumber = false,
-    signcolumn = 'no',
-    foldcolumn = '0',
-    wrap = false,
-    cursorline = true,
-    winfixwidth = true,
-    spell = false,
-    list = false,
-    statuscolumn = '',
-  }) do
-    vim.wo[win][option] = value
-  end
+  local buf, win = panel.open('ProB animation', 'probanimation', 46)
 
   local function map(lhs, action, desc)
     vim.keymap.set('n', lhs, actions[action], { buffer = buf, nowait = true, desc = 'ProB: ' .. desc })
