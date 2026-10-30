@@ -1,0 +1,118 @@
+================================================================================
+Rules machine
+================================================================================
+
+RULES_MACHINE Checks
+REFERENCES Base
+OPERATIONS
+  COMPUTATION COMP_Numbers
+  BODY
+    DEFINE Limit TYPE INTEGER DUMMY_VALUE -1 VALUE 100 END
+  END;
+  RULE RULE_Even
+  DEPENDS_ON_COMPUTATION COMP_Numbers
+  ERROR_TYPES 2
+  ACTIVATION Limit > 0
+  BODY
+    RULE_FORALL x
+    WHERE x : 0..Limit & x mod 2 = 0
+    EXPECT x : EvenNumbers
+    ERROR_TYPE 1
+    COUNTEREXAMPLE STRING_FORMAT("~w is odd", x)
+    END;
+    RULE_FAIL y
+    WHEN y : Odd
+    COUNTEREXAMPLE "odd"
+    END
+  END;
+  FUNCTION out <-- FUNC_Primes(n)
+  PRECONDITION n : NATURAL
+  BODY
+    FOR i IN 1..n DO out := out \/ {i} END
+  END
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (machine_reference_clause
+      (machine_reference
+        (identifier)))
+    (operations_clause
+      (computation_operation
+        (identifier)
+        (define_substitution
+          (identifier)
+          (builtin_set)
+          (unary_formula
+            (integer))
+          (integer)))
+      (rule_operation
+        (identifier)
+        (rule_attribute
+          (attribute_name)
+          (identifier))
+        (rule_attribute
+          (attribute_name)
+          (integer))
+        (rule_attribute
+          (attribute_name)
+          (binary_formula
+            (identifier)
+            (integer)))
+        (sequential_substitution
+          (rule_forall_substitution
+            (identifier_list
+              (identifier))
+            (binary_formula
+              (binary_formula
+                (identifier)
+                (binary_formula
+                  (integer)
+                  (identifier)))
+              (binary_formula
+                (binary_formula
+                  (identifier)
+                  (integer))
+                (integer)))
+            (binary_formula
+              (identifier)
+              (identifier))
+            (integer)
+            (call
+              (identifier)
+              (arguments
+                (string)
+                (identifier))))
+          (rule_fail_substitution
+            (identifier_list
+              (identifier))
+            (binary_formula
+              (identifier)
+              (identifier))
+            (string))))
+      (function_operation
+        (identifier_list
+          (identifier))
+        (identifier)
+        (parameter_list
+          (identifier))
+        (rule_attribute
+          (attribute_name)
+          (binary_formula
+            (identifier)
+            (builtin_set)))
+        (for_substitution
+          (identifier_list
+            (identifier))
+          (binary_formula
+            (integer)
+            (identifier))
+          (assignment
+            (identifier)
+            (binary_formula
+              (identifier)
+              (set_extension
+                (identifier)))))))))

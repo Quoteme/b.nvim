@@ -1,0 +1,361 @@
+================================================================================
+Connectives bind weaker than comparisons
+================================================================================
+
+MACHINE M
+PROPERTIES
+  x : NAT & y = x + 1 or z /= 2 => w <=> v
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (identifier)
+              (builtin_set))
+            (binary_formula
+              (identifier)
+              (binary_formula
+                (identifier)
+                (integer))))
+          (binary_formula
+            (identifier)
+            (integer)))
+        (binary_formula
+          (identifier)
+          (identifier))))))
+
+================================================================================
+Expression operator priorities
+================================================================================
+
+MACHINE M
+PROPERTIES
+  f : A --> B \/ C & n = - a + b * c ** d ** e & s = 1..n - 1
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (identifier)
+              (binary_formula
+                (identifier)
+                (identifier))))
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (unary_formula
+                (identifier))
+              (binary_formula
+                (identifier)
+                (binary_formula
+                  (identifier)
+                  (binary_formula
+                    (identifier)
+                    (identifier)))))))
+        (binary_formula
+          (identifier)
+          (binary_formula
+            (integer)
+            (binary_formula
+              (identifier)
+              (integer))))))))
+
+================================================================================
+Application, image, inverse and record fields
+================================================================================
+
+MACHINE M
+PROPERTIES
+  f(x, y) = r~[S] & rr'name = dom(g)(1) & bool(x > 0) = TRUE
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier)))
+            (image
+              (inverse
+                (identifier))
+              (identifier)))
+          (binary_formula
+            (record_field
+              (identifier)
+              (identifier))
+            (call
+              (builtin_call
+                (builtin_function)
+                (identifier))
+              (arguments
+                (integer)))))
+        (binary_formula
+          (builtin_call
+            (builtin_function)
+            (binary_formula
+              (identifier)
+              (integer)))
+          (boolean))))))
+
+================================================================================
+Quantifiers and comprehension sets
+================================================================================
+
+MACHINE M
+PROPERTIES
+  !x.(x : S => #(y, z).(y + z = x)) &
+  f = %x.(x : NAT | x * x) &
+  s = SIGMA(i).(i : 1..10 | i) &
+  t = {a, b | a : S & b = a} &
+  u = {x • x : 1..3 | x * 2}
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (quantified_predicate
+                (identifier_list
+                  (identifier))
+                (binary_formula
+                  (binary_formula
+                    (identifier)
+                    (identifier))
+                  (quantified_predicate
+                    (identifier_list
+                      (identifier)
+                      (identifier))
+                    (binary_formula
+                      (binary_formula
+                        (identifier)
+                        (identifier))
+                      (identifier)))))
+              (binary_formula
+                (identifier)
+                (quantified_expression
+                  (identifier_list
+                    (identifier))
+                  (binary_formula
+                    (identifier)
+                    (builtin_set))
+                  (binary_formula
+                    (identifier)
+                    (identifier)))))
+            (binary_formula
+              (identifier)
+              (quantified_expression
+                (identifier_list
+                  (identifier))
+                (binary_formula
+                  (identifier)
+                  (binary_formula
+                    (integer)
+                    (integer)))
+                (identifier))))
+          (binary_formula
+            (identifier)
+            (set_comprehension
+              (identifier)
+              (identifier)
+              (binary_formula
+                (binary_formula
+                  (identifier)
+                  (identifier))
+                (binary_formula
+                  (identifier)
+                  (identifier))))))
+        (binary_formula
+          (identifier)
+          (set_comprehension
+            (identifier)
+            (binary_formula
+              (identifier)
+              (binary_formula
+                (integer)
+                (integer)))
+            (binary_formula
+              (identifier)
+              (integer))))))))
+
+================================================================================
+Sets, sequences, tuples and records
+================================================================================
+
+MACHINE M
+PROPERTIES
+  a = {} & b = {1, 2} & c = [] & d = [1, 2] & e = (1, 2) &
+  r = rec(name : "x", age : 3) & g = (f ; h) & k = ∅ & l = <>
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (binary_formula
+              (binary_formula
+                (binary_formula
+                  (binary_formula
+                    (binary_formula
+                      (binary_formula
+                        (identifier)
+                        (empty_set))
+                      (binary_formula
+                        (identifier)
+                        (set_extension
+                          (integer)
+                          (integer))))
+                    (binary_formula
+                      (identifier)
+                      (empty_sequence)))
+                  (binary_formula
+                    (identifier)
+                    (sequence_extension
+                      (integer)
+                      (integer))))
+                (binary_formula
+                  (identifier)
+                  (tuple
+                    (integer)
+                    (integer))))
+              (binary_formula
+                (identifier)
+                (record
+                  (record_entry
+                    (identifier)
+                    (string))
+                  (record_entry
+                    (identifier)
+                    (integer)))))
+            (binary_formula
+              (identifier)
+              (parenthesized_formula
+                (composition
+                  (identifier)
+                  (identifier)))))
+          (binary_formula
+            (identifier)
+            (empty_set)))
+        (binary_formula
+          (identifier)
+          (empty_sequence))))))
+
+================================================================================
+Unicode operators
+================================================================================
+
+MACHINE M
+PROPERTIES
+  ∀x·(x ∈ ℕ ⇒ x ≥ 0) ∧ s ⊆ ℤ ∧ t = ∑(i).(i ∈ 1‥3 | i) ∧ r ∈ ℕ ↔ ℕ
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (quantified_predicate
+              (identifier_list
+                (identifier))
+              (binary_formula
+                (binary_formula
+                  (identifier)
+                  (builtin_set))
+                (binary_formula
+                  (identifier)
+                  (integer))))
+            (binary_formula
+              (identifier)
+              (builtin_set)))
+          (binary_formula
+            (identifier)
+            (quantified_expression
+              (identifier_list
+                (identifier))
+              (binary_formula
+                (identifier)
+                (binary_formula
+                  (integer)
+                  (integer)))
+              (identifier))))
+        (binary_formula
+          (identifier)
+          (binary_formula
+            (builtin_set)
+            (builtin_set)))))))
+
+================================================================================
+Conditional formulas, dotted and primed identifiers
+================================================================================
+
+MACHINE M
+PROPERTIES
+  IF x > 0 THEN M.y ELSE 0 END = LET z BE z = 1 IN z END & x$0 = 1.5 & `when` = 0x1F
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (properties_clause
+      (binary_formula
+        (binary_formula
+          (binary_formula
+            (if_formula
+              (binary_formula
+                (identifier)
+                (integer))
+              (identifier)
+              (integer))
+            (let_formula
+              (identifier_list
+                (identifier))
+              (binary_formula
+                (identifier)
+                (integer))
+              (identifier)))
+          (binary_formula
+            (primed_identifier
+              (identifier))
+            (real)))
+        (binary_formula
+          (identifier)
+          (integer))))))

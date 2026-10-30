@@ -1,0 +1,245 @@
+================================================================================
+Machine with all common clauses
+================================================================================
+
+MACHINE Counter(MAX)
+CONSTRAINTS MAX : NAT1
+SEES Lib, Other.Ctx
+INCLUDES Sub(MAX)
+PROMOTES inc
+SETS COLOUR = {red, green}; ID
+CONCRETE_CONSTANTS c
+PROPERTIES c = 1
+ABSTRACT_VARIABLES x
+INVARIANT x : 0..MAX
+ASSERTIONS x >= 0; x <= MAX
+INITIALISATION x := 0
+OPERATIONS
+  res <-- get = res := x;
+  set(v) = PRE v : NAT THEN x := v END
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (parameter_list
+      (identifier))
+    (constraints_clause
+      (binary_formula
+        (identifier)
+        (builtin_set)))
+    (machine_reference_clause
+      (machine_reference
+        (identifier))
+      (machine_reference
+        (identifier)))
+    (machine_reference_clause
+      (machine_reference
+        (identifier)
+        (identifier)))
+    (promotes_clause
+      (identifier))
+    (sets_clause
+      (set_declaration
+        (identifier)
+        (identifier)
+        (identifier))
+      (set_declaration
+        (identifier)))
+    (constants_clause
+      (identifier_list
+        (identifier)))
+    (properties_clause
+      (binary_formula
+        (identifier)
+        (integer)))
+    (variables_clause
+      (identifier_list
+        (identifier)))
+    (invariant_clause
+      (binary_formula
+        (identifier)
+        (binary_formula
+          (integer)
+          (identifier))))
+    (assertions_clause
+      (binary_formula
+        (identifier)
+        (integer))
+      (binary_formula
+        (identifier)
+        (identifier)))
+    (initialisation_clause
+      (assignment
+        (identifier)
+        (integer)))
+    (operations_clause
+      (operation
+        (identifier_list
+          (identifier))
+        (identifier)
+        (assignment
+          (identifier)
+          (identifier)))
+      (operation
+        (identifier)
+        (parameter_list
+          (identifier))
+        (precondition_substitution
+          (binary_formula
+            (identifier)
+            (builtin_set))
+          (assignment
+            (identifier)
+            (identifier)))))))
+
+================================================================================
+Refinement
+================================================================================
+
+REFINEMENT Counter_r
+REFINES Counter
+VARIABLES y
+INVARIANT y = x
+INITIALISATION y := 0
+OPERATIONS
+  inc = y := y + 1
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (refines_clause
+      (identifier))
+    (variables_clause
+      (identifier_list
+        (identifier)))
+    (invariant_clause
+      (binary_formula
+        (identifier)
+        (identifier)))
+    (initialisation_clause
+      (assignment
+        (identifier)
+        (integer)))
+    (operations_clause
+      (operation
+        (identifier)
+        (assignment
+          (identifier)
+          (binary_formula
+            (identifier)
+            (integer)))))))
+
+================================================================================
+Definitions of formulas and substitutions
+================================================================================
+
+MACHINE M
+DEFINITIONS
+  "LibraryIO.def";
+  SQR(x) == x * x;
+  Positive(x) == x > 0;
+  Reset == BEGIN y := 0 END;
+  SET_PREF_MAXINT == 10;
+VARIABLES y
+INVARIANT y : NAT
+INITIALISATION Reset
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (definitions_clause
+      (definition_file
+        (string))
+      (definition
+        (identifier)
+        (parameter_list
+          (identifier))
+        (binary_formula
+          (identifier)
+          (identifier)))
+      (definition
+        (identifier)
+        (parameter_list
+          (identifier))
+        (binary_formula
+          (identifier)
+          (integer)))
+      (definition
+        (identifier)
+        (block_substitution
+          (assignment
+            (identifier)
+            (integer))))
+      (definition
+        (identifier)
+        (integer)))
+    (variables_clause
+      (identifier_list
+        (identifier)))
+    (invariant_clause
+      (binary_formula
+        (identifier)
+        (builtin_set)))
+    (initialisation_clause
+      (operation_call
+        (identifier)))))
+
+================================================================================
+Definitions file
+================================================================================
+
+DEFINITIONS
+  Wrap(x) == [x]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (definitions_clause
+    (definition
+      (identifier)
+      (parameter_list
+        (identifier))
+      (sequence_extension
+        (identifier)))))
+
+================================================================================
+Comments and pragmas
+================================================================================
+
+MACHINE M // line comment
+/* block
+   comment */
+VARIABLES x /*@desc the counter */
+INVARIANT /*@label "inv1" */ x : NAT
+INITIALISATION x := 0
+END
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (component
+    (identifier)
+    (comment)
+    (comment)
+    (variables_clause
+      (identifier_list
+        (identifier)))
+    (pragma)
+    (invariant_clause
+      (pragma)
+      (binary_formula
+        (identifier)
+        (builtin_set)))
+    (initialisation_clause
+      (assignment
+        (identifier)
+        (integer)))))

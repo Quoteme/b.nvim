@@ -1,0 +1,185 @@
+================================================================================
+Context
+================================================================================
+
+context C1 extends C0
+sets PERSONS COLOURS
+constants red green limit // the limit
+axioms
+  @axm1 partition(COLOURS, {red}, {green})
+  @axm2 limit ∈ ℕ1
+  theorem @thm1 red ≠ green
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (context
+    (identifier)
+    (extends_clause
+      (identifier))
+    (sets_clause
+      (carrier_set
+        (identifier))
+      (carrier_set
+        (identifier)))
+    (constants_clause
+      (constant
+        (identifier))
+      (constant
+        (identifier))
+      (constant
+        (identifier)))
+    (comment)
+    (axioms_clause
+      (axiom
+        (label)
+        (builtin_call
+          (builtin_function)
+          (identifier)
+          (set_extension
+            (identifier))
+          (set_extension
+            (identifier))))
+      (axiom
+        (label)
+        (binary_formula
+          (identifier)
+          (builtin_set)))
+      (axiom
+        (label)
+        (binary_formula
+          (identifier)
+          (identifier))))))
+
+================================================================================
+Machine with refined and extended events
+================================================================================
+
+machine M1 refines M0 sees C1
+variables x y
+invariants
+  @inv1 x ∈ ℕ
+  @inv2 y ⊆ PERSONS
+variant limit − x
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @act2 y ≔ ∅
+  end
+
+  convergent event step refines inc
+    any p q
+    where
+      @grd1 p ∈ PERSONS ∖ y
+      @grd2 x < limit
+    with
+      @n n = x + 1
+    then
+      @act1 x, y ≔ x + 1, y ∪ {p}
+  end
+
+  event pick
+    when
+      @grd1 y ≠ ∅
+    begin
+      @act1 x :∈ 0 ‥ limit
+      @act2 y :∣ y' ⊆ y
+  end
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (machine
+    (identifier)
+    (refines_clause
+      (identifier))
+    (sees_clause
+      (identifier))
+    (variables_clause
+      (identifier)
+      (identifier))
+    (invariants_clause
+      (invariant
+        (label)
+        (binary_formula
+          (identifier)
+          (builtin_set)))
+      (invariant
+        (label)
+        (binary_formula
+          (identifier)
+          (identifier))))
+    (variant_clause
+      (binary_formula
+        (identifier)
+        (identifier)))
+    (events_clause
+      (event
+        (identifier)
+        (identifier)
+        (action
+          (label)
+          (becomes_equal_to
+            (identifier)
+            (empty_set))))
+      (event
+        (identifier)
+        (identifier)
+        (parameter
+          (identifier))
+        (parameter
+          (identifier))
+        (guard
+          (label)
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (identifier)
+              (identifier))))
+        (guard
+          (label)
+          (binary_formula
+            (identifier)
+            (identifier)))
+        (witness
+          (label)
+          (binary_formula
+            (identifier)
+            (binary_formula
+              (identifier)
+              (integer))))
+        (action
+          (label)
+          (becomes_equal_to
+            (identifier)
+            (identifier)
+            (binary_formula
+              (identifier)
+              (integer))
+            (binary_formula
+              (identifier)
+              (set_extension
+                (identifier))))))
+      (event
+        (identifier)
+        (guard
+          (label)
+          (binary_formula
+            (identifier)
+            (empty_set)))
+        (action
+          (label)
+          (becomes_member_of
+            (identifier)
+            (binary_formula
+              (integer)
+              (identifier))))
+        (action
+          (label)
+          (becomes_such_that
+            (identifier)
+            (binary_formula
+              (identifier)
+              (identifier))))))))
