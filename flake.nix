@@ -92,6 +92,7 @@
       # only those whose name contains the first argument.
       prob-spec = pkgs.writeShellScriptBin "prob-spec" ''
         cd "''${PROB_VIM_ROOT:-$PWD}"
+        export PROB_EXAMPLES=${b-language-server.src}/src/main/resources/documentation/examples.json
         exec ${nvim-prob}/bin/nvim-prob -l tests/spec.lua "$@"
       '';
     in

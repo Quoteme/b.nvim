@@ -206,15 +206,11 @@ end
 
 --- The examples of the hover documentation in `language` that must be true.
 local function examples(language)
-  local path = vim.fs.dirname(vim.fs.dirname(vim.fs.normalize(root))) .. '/nix/b-language-server/hover/examples.tsv'
-  local result = {}
-  for _, line in ipairs(vim.fn.readfile(path)) do
-    local fields = vim.split(line, '\t', { plain = true })
-    if fields[1] == language and fields[3] == 'pred' then
-      table.insert(result, { title = fields[2], text = fields[4] })
-    end
-  end
-  return result
+  -- The server's documentation/examples.json, located by prob-spec.
+  local path = assert(vim.env.PROB_EXAMPLES, 'PROB_EXAMPLES is not set')
+  return vim.tbl_filter(function(example)
+    return example.language == language and example.kind == 'pred'
+  end, vim.json.decode(table.concat(vim.fn.readfile(path), '\n')))
 end
 
 --- Checks that every Event-B example is a theorem ProB proves, as part of a context.
@@ -314,6 +310,28 @@ local function run(spec)
         table.insert(errors, ('hover lacks %q: %q'):format(want, text))
       end
     end
+    return errors
+  end
+  if spec.complete then
+    -- Types the line without saving, as the server completes the editor's text.
+    local lnum, text = spec.complete[1], spec.complete[2]
+    local buf = vim.api.nvim_get_current_buf()
+    vim.api.nvim_buf_set_lines(buf, lnum - 1, lnum, false, { text })
+    local client = vim.lsp.get_clients({ bufnr = buf, name = 'prob' })[1]
+    -- The buffer's number, not 0: only then does the client send the change first.
+    local response = client:request_sync('textDocument/completion', {
+      textDocument = { uri = vim.uri_from_bufnr(buf) },
+      position = { line = lnum - 1, character = #text },
+    }, 60000, buf)
+    local result = response and response.result or {}
+    local labels = vim.tbl_map(function(item) return item.label end, result.items or result)
+    local errors = {}
+    for _, want in ipairs(spec.offers) do
+      if not vim.tbl_contains(labels, want) then
+        table.insert(errors, ('completion lacks %q: %s'):format(want, table.concat(labels, ', ')))
+      end
+    end
+    vim.cmd('silent! %bwipeout!')
     return errors
   end
 
