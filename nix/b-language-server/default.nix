@@ -29,31 +29,14 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "b-language-server";
-  version = "0-unstable-2025-10-10";
+  version = "0-unstable-2026-10-30";
 
   src = fetchFromGitHub {
-    owner = "hhu-stups";
+    owner = "Quoteme";
     repo = "b-language-server";
-    rev = "16595180e7e02666d0544d6b554715637c3a7ca4";
-    hash = "sha256-qCh+7LzXDtB9mO1lxyoZ+1X7BKqWgtvnuByQDSSeMcc=";
+    rev = "56661e2a18f471c1d6c15f8ada0862ea566405dd";
+    hash = "sha256-xXSHCdOSUqvJg40SD6m2nknlB3Pbm7kP2r2FRM0SvBI=";
   };
-
-  patches = [
-    # Adds a `--stdio` transport, checks documents on open and save only,
-    # tolerates partial client settings, publishes file:// URIs, and matches
-    # prob-java to probcli 1.16.
-    ./client-compat.patch
-    # Checks Event-B machines and contexts written in Camille notation like
-    # Rodin: static checks, proof obligations discharged with ProB, model
-    # checking and animation as code actions, and hover documentation.
-    ./eventb-camille.patch
-  ];
-
-  # Hover documentation generated from the Rodin Handbook and ProB's
-  # Summary of B Syntax by hover/generate.py.
-  postPatch = ''
-    install -Dm644 -t src/main/resources/hover ${./hover}/eventb.tsv ${./hover}/classical.tsv ${./hover}/examples.tsv
-  '';
 
   nativeBuildInputs = [
     gradle
@@ -84,7 +67,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   meta = {
     description = "Language server for the B method, using ProB as backend";
-    homepage = "https://github.com/hhu-stups/b-language-server";
+    homepage = "https://github.com/Quoteme/b-language-server";
     license = lib.licenses.epl20;
     mainProgram = "b-language-server";
     platforms = lib.platforms.linux;

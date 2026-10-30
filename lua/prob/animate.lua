@@ -431,11 +431,6 @@ local function visualize(kind, command, formulas)
   if not session or session.busy then
     return
   end
-  local commands = vim.tbl_get(session.client.server_capabilities, 'executeCommandProvider', 'commands') or {}
-  if not vim.tbl_contains(commands, 'prob.visualize') then
-    vim.notify('prob: this b-language-server cannot visualise; update it (see :checkhealth prob)', vim.log.levels.ERROR)
-    return
-  end
   session.busy = true
   render()
   local args = {
@@ -687,7 +682,7 @@ function M.start(bufnr)
     return
   end
   local commands = vim.tbl_get(client.server_capabilities, 'executeCommandProvider', 'commands') or {}
-  if not vim.tbl_contains(commands, 'prob.animate') then
+  if not vim.tbl_contains(commands, 'prob.animate') or not vim.tbl_contains(commands, 'prob.visualize') then
     vim.notify(
       'prob: this b-language-server cannot animate; it is older than the plugin. Update it (see :checkhealth prob).',
       vim.log.levels.ERROR

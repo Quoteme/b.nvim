@@ -20,6 +20,9 @@ M.config = {
     },
   },
   treesitter = true,
+  -- Neovim's built-in completion with the server's suggestions, opening while
+  -- typing; skipped when nvim-cmp or blink.cmp provide completion instead.
+  completion = true,
   -- Replace ASCII combinations by Event-B symbols while typing, like Rodin.
   keyboard = true,
   -- Buffer-local mappings in B and Event-B files, shown by which-key if it is
@@ -100,6 +103,28 @@ local function enable_quickfix_checker()
   })
 end
 
+--- Opens the server's suggestions while typing with Neovim's own completion,
+--- unless a completion plugin loaded by the time of the first insert shows them.
+local function enable_completion(client, buf)
+  vim.api.nvim_create_autocmd('InsertEnter', {
+    buffer = buf,
+    once = true,
+    -- Scheduled, so that plugins lazy-loaded on InsertEnter are loaded already.
+    callback = vim.schedule_wrap(function()
+      if package.loaded['blink.cmp'] or package.loaded['cmp'] or client:is_stopped() then
+        return
+      end
+      -- The server declares no trigger characters; any printable one opens the menu.
+      local chars = {}
+      for byte = 33, 126 do
+        table.insert(chars, string.char(byte))
+      end
+      client.server_capabilities.completionProvider.triggerCharacters = chars
+      vim.lsp.completion.enable(true, client.id, buf, { autotrigger = true })
+    end),
+  })
+end
+
 local function enable_lsp()
   vim.lsp.config('prob', {
     cmd = M.config.lsp.cmd,
@@ -107,6 +132,11 @@ local function enable_lsp()
     root_markers = { '.git' },
     settings = M.config.lsp.settings,
     handlers = { ['window/showMessage'] = show_message },
+    on_attach = function(client, buf)
+      if M.config.completion and client:supports_method('textDocument/completion') then
+        enable_completion(client, buf)
+      end
+    end,
   })
   vim.lsp.commands['prob.showPOs'] = show_pos
   -- The "ProB: animate" code action opens the animation panel.

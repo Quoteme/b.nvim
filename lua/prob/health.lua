@@ -22,13 +22,16 @@ function M.check()
     )
   end
 
-  -- A running server older than the plugin lacks hover and the animator.
+  -- A running server older than the plugin lacks hover, completion and the animator.
   for _, client in ipairs(vim.lsp.get_clients({ name = 'prob' })) do
     local caps = client.server_capabilities or {}
     local commands = vim.tbl_get(caps, 'executeCommandProvider', 'commands') or {}
     local missing = {}
     if not caps.hoverProvider then
       table.insert(missing, 'hover')
+    end
+    if not caps.completionProvider then
+      table.insert(missing, 'completion')
     end
     if not vim.tbl_contains(commands, 'prob.animate') then
       table.insert(missing, 'animation')
@@ -37,7 +40,7 @@ function M.check()
       table.insert(missing, 'visualisations')
     end
     if #missing == 0 then
-      health.ok(('Running language server (client %d) supports hover, animation and visualisations'):format(client.id))
+      health.ok(('Running language server (client %d) supports hover, completion, animation and visualisations'):format(client.id))
     else
       health.error(
         ('Running language server (client %d) is older than the plugin: no %s'):format(client.id, table.concat(missing, ', ')),
